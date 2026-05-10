@@ -72,6 +72,31 @@ async function main(): Promise<void> {
     eq("alive after dispose", p.alive, false);
   });
 
+  // ── Test 4: getChildren() empty when idle ─────────────────────────────────
+  await test("getChildren() returns [] when bash is idle", async () => {
+    const p = new InteractivePty();
+    await p.start();
+    await sleep(200); // let bash settle
+    const kids = await p.getChildren();
+    if (kids.length !== 0) {
+      throw new Error(`expected [], got ${JSON.stringify(kids)}`);
+    }
+    p.dispose();
+  });
+
+  // ── Test 5: getChildren() lists running child ─────────────────────────────
+  await test("getChildren() lists 'sleep' while sleep is running", async () => {
+    const p = new InteractivePty();
+    await p.start();
+    p.write("sleep 30 &\n");
+    await sleep(300); // give bash time to fork
+    const kids = await p.getChildren();
+    p.dispose();
+    if (!kids.some((k) => k.cmd.includes("sleep"))) {
+      throw new Error(`expected sleep child, got ${JSON.stringify(kids)}`);
+    }
+  });
+
   // ── Summary ──────────────────────────────────────────────────────────────
   const total = passed + failed;
   console.log(`\n${total} tests — ${passed} passed, ${failed} failed`);

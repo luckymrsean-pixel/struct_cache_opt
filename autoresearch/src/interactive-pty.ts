@@ -51,6 +51,59 @@ export class InteractivePty extends EventEmitter {
     try { this.proc.resize(cols, rows); } catch { /* ignore */ }
   }
 
+  /**
+   * List child processes spawned beneath this PTY's bash, e.g. a running
+   * `copilot` or `sleep` command. Returns [] when bash is idle.
+   *
+   * Strategy:
+   *   1. Try `pgrep -P <pid> -a` (returns "PID command-line" lines).
+   *   2. Fallback: read /proc/<pid>/task/* /children + ps -o comm= for each.
+   */
+  async getChildren(): Promise<{ pid: number; cmd: string }[]> {
+    if (!this.alive || this.pid == null) return [];
+    const parent = this.pid;
+
+    const pgrep = await this._exec(`pgrep -P ${parent} -a`);
+    if (pgrep.code === 0 && pgrep.stdout.trim()) {
+      return pgrep.stdout.trim().split("\n").map((line) => {
+        const sp = line.indexOf(" ");
+        const pid = Number(sp < 0 ? line : line.slice(0, sp));
+        const cmd = sp < 0 ? "" : line.slice(sp + 1);
+        return { pid, cmd };
+      });
+    }
+
+    // Fallback: /proc/<pid>/task/*/children
+    const fs = await import("fs");
+    const path = await import("path");
+    const taskDir = `/proc/${parent}/task`;
+    if (!fs.existsSync(taskDir)) return [];
+    const childPids = new Set<number>();
+    for (const tid of fs.readdirSync(taskDir)) {
+      const file = path.join(taskDir, tid, "children");
+      try {
+        for (const s of fs.readFileSync(file, "utf8").trim().split(/\s+/)) {
+          if (s) childPids.add(Number(s));
+        }
+      } catch { /* ignore */ }
+    }
+    const out: { pid: number; cmd: string }[] = [];
+    for (const cpid of childPids) {
+      const ps = await this._exec(`ps -o comm= -p ${cpid}`);
+      out.push({ pid: cpid, cmd: ps.stdout.trim() });
+    }
+    return out;
+  }
+
+  private _exec(cmd: string): Promise<{ code: number; stdout: string }> {
+    return new Promise((resolve) => {
+      const cp = require("child_process");
+      cp.exec(cmd, { encoding: "utf8" }, (err: { code?: number } | null, stdout: string) => {
+        resolve({ code: err?.code ?? 0, stdout: stdout ?? "" });
+      });
+    });
+  }
+
   dispose(): void {
     this.alive = false;
     try { this.proc?.kill(); } catch { /* ignore */ }
