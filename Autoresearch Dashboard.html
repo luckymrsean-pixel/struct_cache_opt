@@ -170,6 +170,12 @@ label.field-lbl { display:block; font-size:10px; color:var(--dim); margin-bottom
 .term-label .tl-dot { width:6px; height:6px; border-radius:50%; background:var(--border); }
 .term-label .tl-dot.active { background:var(--green); }
 .term-inner { position:absolute; inset:22px 0 0 0; padding:4px; }
+.restart-btn {
+  background: transparent; border: 1px solid rgba(255,255,255,0.15);
+  color: var(--dim); padding: 0 6px; border-radius: 3px; cursor: pointer;
+  font-size: 12px; line-height: 14px;
+}
+.restart-btn:hover { color: var(--blue); border-color: var(--blue); }
 
 /* Divider handle */
 #divider {
@@ -294,15 +300,17 @@ label.field-lbl { display:block; font-size:10px; color:var(--dim); margin-bottom
   <div class="term-wrap" id="term-main-wrap">
     <div class="term-label">
       <div class="tl-dot active" id="main-dot"></div>
-      Main Terminal — 系统 / 用户输入
+      <span style="flex:1">Main Terminal — 系统 / 用户输入</span>
+      <button class="restart-btn" onclick="requestRestart('main')" title="Restart main bash">↻</button>
     </div>
     <div class="term-inner" id="term-main"></div>
   </div>
   <div id="divider"></div>
   <div class="term-wrap" id="term-cli-wrap">
     <div class="term-label">
-      <div class="tl-dot" id="cli-dot"></div>
-      Copilot CLI — Stage 1 专用
+      <div class="tl-dot active" id="cli-dot"></div>
+      <span style="flex:1">Copilot CLI — Stage 1 专用</span>
+      <button class="restart-btn" onclick="requestRestart('cli')" title="Restart cli bash">↻</button>
     </div>
     <div class="term-inner" id="term-cli"></div>
   </div>
@@ -643,10 +651,28 @@ main.term.onData(d => {
 });
 main.term.onResize(({cols,rows}) => { if(ws?.readyState===WebSocket.OPEN) ws.send(JSON.stringify({type:'resize', term:'main', cols, rows})); });
 
-// Stubs — fully implemented in restart-button (Task 9) and dead-banner (Task 10) tasks.
-function showDeadBanner(term, info)  { console.warn(`[dashboard] ${term} died:`, info); }
-function hideDeadBanner(term)        { /* no-op until Task 10 */ }
-function handleRestartCheck(m)       { /* no-op until Task 9 */ }
+// Stubs — showDeadBanner / hideDeadBanner replaced in Task 10.
+function showDeadBanner(term, info) { console.warn(`[dashboard] ${term} died:`, info); }
+function hideDeadBanner(term)       { /* no-op until Task 10 */ }
+
+function requestRestart(term) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    showToast(`Cannot restart ${term}: WS disconnected`);
+    return;
+  }
+  ws.send(JSON.stringify({ type:'restart-check', term }));
+}
+
+function handleRestartCheck(m) {
+  if (!m.hasChildren) {
+    ws.send(JSON.stringify({ type:'restart', term: m.term }));
+    return;
+  }
+  const cmds = (m.childCmds || []).filter(Boolean).join(', ') || '(unknown)';
+  if (confirm(`正在运行: ${cmds}\n确认重启 ${m.term} 终端?`)) {
+    ws.send(JSON.stringify({ type:'restart', term: m.term }));
+  }
+}
 
 function connectWS() {
   try {
