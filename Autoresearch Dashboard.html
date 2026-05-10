@@ -364,6 +364,23 @@ const main = makeTerm('term-main');
 const cli  = makeTerm('term-cli');
 main.term.focus();
 
+// Wire cli terminal: forward keystrokes and resize to server (term:"cli").
+cli.term.onData(d => {
+  if (ws?.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type:'input', term:'cli', data:d }));
+  } else {
+    // Demo / disconnected fallback: local echo so the terminal looks responsive.
+    if (d === '\r') cli.term.write('\r\n');
+    else if (d === '\x7f') cli.term.write('\b \b');
+    else cli.term.write(d);
+  }
+});
+cli.term.onResize(({cols,rows}) => {
+  if (ws?.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type:'resize', term:'cli', cols, rows }));
+  }
+});
+
 // Resize both on window resize
 new ResizeObserver(() => { main.fit.fit(); cli.fit.fit(); }).observe(document.getElementById('center'));
 
