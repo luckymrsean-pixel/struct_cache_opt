@@ -78,10 +78,10 @@ async function main(): Promise<void> {
     await p.start();
     await sleep(200); // let bash settle
     const kids = await p.getChildren();
+    p.dispose();
     if (kids.length !== 0) {
       throw new Error(`expected [], got ${JSON.stringify(kids)}`);
     }
-    p.dispose();
   });
 
   // ── Test 5: getChildren() lists running child ─────────────────────────────

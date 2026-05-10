@@ -1,5 +1,8 @@
 import * as pty from "node-pty";
 import { EventEmitter } from "events";
+import { exec, type ExecException } from "child_process";
+import * as fs from "fs";
+import * as path from "path";
 
 /**
  * InteractivePty — plain interactive bash PTY for the dashboard.
@@ -73,9 +76,10 @@ export class InteractivePty extends EventEmitter {
       });
     }
 
+    // pgrep available but no children → fast path, skip /proc scan.
+    if (pgrep.code === 1 && !pgrep.stdout.trim()) return [];
+
     // Fallback: /proc/<pid>/task/*/children
-    const fs = await import("fs");
-    const path = await import("path");
     const taskDir = `/proc/${parent}/task`;
     if (!fs.existsSync(taskDir)) return [];
     const childPids = new Set<number>();
@@ -97,8 +101,7 @@ export class InteractivePty extends EventEmitter {
 
   private _exec(cmd: string): Promise<{ code: number; stdout: string }> {
     return new Promise((resolve) => {
-      const cp = require("child_process");
-      cp.exec(cmd, { encoding: "utf8" }, (err: { code?: number } | null, stdout: string) => {
+      exec(cmd, { encoding: "utf8" }, (err: ExecException | null, stdout: string) => {
         resolve({ code: err?.code ?? 0, stdout: stdout ?? "" });
       });
     });
