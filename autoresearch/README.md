@@ -100,6 +100,94 @@ Dashboard 默认 `http://localhost:8080`,环境变量 `AR_PORT=8181 npx tsx …`
 
 ---
 
+## 运维速查 — 启停 / 状态 / 日志 / diff
+
+> 路径假定:repo 根 = `/mnt/f/code2/struct_cache_opt`(下文用 `$REPO`),
+> `workdir` = `/home/$USER/angle`(yml 里设)。换机器了请整体替换。
+
+### 启动 (后台)
+
+```bash
+cd "$REPO/autoresearch"
+nohup node node_modules/tsx/dist/cli.mjs src/index.ts ../vk-image-helper.yml \
+  > /dev/null 2>> "$REPO/loop.log" < /dev/null & disown
+echo $! > "$REPO/loop.pid"
+
+# 4 秒后验端口
+sleep 4 && ss -tlnp 2>/dev/null | grep 8080 && echo "✓ up" || echo "✗ down"
+```
+
+### 检测服务器状态
+
+```bash
+# 1. 进程是否还在
+ps -p "$(cat "$REPO/loop.pid")" -o pid,etime,stat,cmd 2>/dev/null \
+  || echo "loop.pid 已死"
+
+# 2. 端口是否监听
+ss -tlnp 2>/dev/null | grep 8080 || echo "port 8080 free"
+
+# 3. /api/state — 单次 JSON 快照,内含 iter / phase / stages / pty
+curl -s --noproxy '*' http://127.0.0.1:8080/api/state \
+  | python3 -c "import json,sys; s=json.load(sys.stdin)['status']; \
+                print('iter:',s['iter'],'phase:',s['phase'],\
+                      'best:',s['best'],'alive:',s['alive'])"
+
+# 4. Dashboard 顶栏左侧的 ws-dot:绿=WS 直连,黄=HTTP 轮询/demo
+```
+
+### 停止
+
+```bash
+# 优雅:loop 跑完当前 iter 再退
+# 也可在 dashboard 顶栏点 ⏹ Stop(等同 stopRequested 信号)
+kill "$(cat "$REPO/loop.pid")"
+
+# 强制(端口仍占住时):
+fuser -k 8080/tcp     # 杀任何监听 8080 的进程
+
+# 一键 kill all + 清掉 pid/log
+kill "$(cat "$REPO/loop.pid")" 2>/dev/null
+fuser -k 8080/tcp 2>/dev/null
+rm -f "$REPO/loop.pid" "$REPO/loop.log"
+```
+
+### 文件位置一览
+
+| 文件 | 路径 | 内容 |
+|---|---|---|
+| 当前 diff | `$workdir/.ar.patch` | Stage 1 输出的 unified diff,Stage 2 `git apply` 直接读这个文件。每 iter 覆盖。 |
+| Loop 日志 | `$REPO/loop.log` | 后端 stderr 全量(loopTerm PTY 字节 + `[iter N] stage M:` 等 console.error 行)。Dashboard 顶部"Loop"面板逐字节同源,无须 `tail -F`。 |
+| LLM 输出 | 同上,在 stage 1 的 `__OUT__diff …` 行里。Stage 1 LLM 的"思考日志"(claude -p 的 stderr)被前缀成 `__ERR__` 行,也在 loop.log 里。 | 没有单独 stage-1.log;dashboard 左栏 stage 列表里的 `stage-N.log` 是 UI 占位,实际文件不存在(除 build.log 外)。 |
+| Build 日志 | `$workdir/build.log` | guardCmd 里 `tee build.log` 留下的编译输出(autoninja 全文)。 |
+| Metric 历史 | `$REPO/results.tsv` | 每 iter 一行 TSV(iter / status / metric / delta / desc / ts)。session 间累积,不会因重启被 truncate。 |
+| 进程 PID | `$REPO/loop.pid` | 启动脚本 echo 进去的 nohup 子进程 PID。 |
+
+### Stage 1 LLM 鉴权
+
+每个 LLM CLI 都需要一次性鉴权,在 dashboard 启动后、点 Start 前,在
+**底部 CLI 面板**里执行(loop 进程会等 Start 信号才进入 Stage 1):
+
+```bash
+# Anthropic Claude (官方 CLI)
+claude login                     # 浏览器跳转 OAuth
+
+# GitHub Copilot CLI
+gh auth login                    # gh 主鉴权(交互式)
+gh extension install github/gh-copilot   # 装 copilot 子命令
+gh copilot --version             # 验证
+
+# 切换 Stage 1 调用的 CLI(默认 claude -p):
+# 在 yml 的 env 段里改 IDEATE_CLI,例如:
+#   env:
+#     IDEATE_CLI: "gh copilot suggest -t shell"
+```
+
+鉴权 token 存在用户 home(`~/.config/claude/`、`~/.config/gh/`),
+不会随 tarball 打包。新机器需重新登录一次。
+
+---
+
 ## 前置依赖
 
 | 工具 | 版本 | 用途 |
