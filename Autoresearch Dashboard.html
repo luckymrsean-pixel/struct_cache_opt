@@ -169,6 +169,7 @@ label.field-lbl { display:block; font-size:10px; color:var(--dim); margin-bottom
 }
 .term-label .tl-dot { width:6px; height:6px; border-radius:50%; background:var(--border); }
 .term-label .tl-dot.active { background:var(--green); }
+.term-label .tl-dot.dead { background:var(--red); }
 .term-inner { position:absolute; inset:22px 0 0 0; padding:4px; }
 .restart-btn {
   background: transparent; border: 1px solid rgba(255,255,255,0.15);
@@ -651,9 +652,20 @@ main.term.onData(d => {
 });
 main.term.onResize(({cols,rows}) => { if(ws?.readyState===WebSocket.OPEN) ws.send(JSON.stringify({type:'resize', term:'main', cols, rows})); });
 
-// Stubs — showDeadBanner / hideDeadBanner replaced in Task 10.
-function showDeadBanner(term, info) { console.warn(`[dashboard] ${term} died:`, info); }
-function hideDeadBanner(term)       { /* no-op until Task 10 */ }
+function showDeadBanner(term, info) {
+  const xterm = (term === 'cli' ? cli : main).term;
+  const code   = info?.code   ?? '?';
+  const signal = info?.signal ? ` (signal ${info.signal})` : '';
+  // Red ANSI message inside the terminal itself.
+  xterm.write(`\r\n\x1b[1;31m── ${term} terminal exited (code ${code}${signal}) — click ↻ to restart ──\x1b[0m\r\n`);
+  const dot = document.getElementById(`${term}-dot`);
+  if (dot) { dot.classList.remove('active'); dot.classList.add('dead'); }
+}
+
+function hideDeadBanner(term) {
+  const dot = document.getElementById(`${term}-dot`);
+  if (dot) { dot.classList.remove('dead'); dot.classList.add('active'); }
+}
 
 function requestRestart(term) {
   if (!ws || ws.readyState !== WebSocket.OPEN) {
