@@ -1,0 +1,70 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# autoresearch — vk::ImageHelper struct layout optimization
+# ─────────────────────────────────────────────────────────────────────────────
+# Loop: pahole-driven LLM rewrite of vk::ImageHelper field order, validated by
+# rebuilding ANGLE Release and running gfxbench gl_5_normal. Higher fps wins.
+
+goal:    最大化 gl_5_normal fps，途径=优化 vk::ImageHelper 缓存对齐与字段排布
+remote:  ""                                # local
+workdir: /home/fxy/angle
+
+scope:
+  - src/libANGLE/renderer/vulkan/vk_helpers.h
+  - src/libANGLE/renderer/vulkan/vk_helpers.cpp
+
+# ── Skill ────────────────────────────────────────────────────────────────────
+# The skill at $skillDir is the LLM-driven diff generator. It reads context
+# (pahole report + git log + TSV tail) on stdin and the source files in
+# $AR_SCOPE, then calls $IDEATE_CLI (default: claude -p) to emit a unified diff.
+skillDir: /home/fxy/.claude/skills/struct_cache_opt
+# ideatePrompt resolves to ${skillDir}/run.sh automatically when skillDir is set.
+
+# ── Per-iteration context (the loop runs these, prepends stdout to LLM heredoc)
+# pahole-image-helper.sh builds a one-off debug .o for vk_helpers.cc the first
+# time (~30-90s, then cached by ninja) and emits the layout + reorganize report.
+contextCmds:
+  - /home/fxy/.claude/skills/struct_cache_opt/lib/pahole-image-helper.sh
+
+# ── Env exported into the PTY before each session ────────────────────────────
+# IDEATE_CLI selects which CLI the skill calls. Override here, in autoresearch.yml,
+# or set in the dashboard terminal before clicking Start.
+env:
+  IDEATE_CLI: "claude -p"
+  AR_DEPOT_TOOLS: /home/fxy/depot_tools
+
+# ── setupCmds run AFTER the operator clicks Start (post manual auth) ─────────
+setupCmds:
+  - export CCACHE_DIR=$HOME/.ccache
+  - cd /home/fxy/angle && git config user.email autoresearch@local || true
+
+# ── Build ANGLE Release (libGLESv2/libEGL — what gfxbench links against) ─────
+guardCmd: |
+  cd /home/fxy/angle && \
+    PATH=$AR_DEPOT_TOOLS:$PATH DEPOT_TOOLS_UPDATE=0 \
+    autoninja -C out/Release libGLESv2 libEGL 2>&1 | tee build.log
+
+# ── Run gfxbench gl_5_normal, extract fps from the result JSON ───────────────
+verifyCmd: |
+  cd /home/fxy/work/gfxbench/tfw-pkg && \
+    ./bin/testfw_app -b . --gfx egl -t gl_5_normal >/dev/null 2>&1 && \
+    jq -r '.results[0].results.fps' "$(ls -td results/*/ | head -1)gl_5_normal.json"
+
+# ── Diagnostics on build/verify failure ──────────────────────────────────────
+diagCmd: |
+  grep -E "^.*error:" /home/fxy/angle/build.log 2>/dev/null | head -5 || true
+
+# ── Comparison ───────────────────────────────────────────────────────────────
+direction:   higher
+metricLabel: fps
+metricUnit:  fps
+
+# ── Dry-run patch (used when the dashboard's Dry Run toggle is ON) ───────────
+# Trivial in-scope edit: ensures Stage 2 (apply) → Stage 3 (build) → Stage 4
+# (verify) all exercise. Generated at session-prep time by tools/gen-dryrun-patch.sh.
+dryRunPatch: /tmp/struct_cache_opt.fake.patch
+
+# ── Scheduling ───────────────────────────────────────────────────────────────
+iterations:      20
+plateauPatience: 6
+memoryDepth:     20
+tsvPath:         /mnt/f/code2/struct_cache_opt/results.tsv

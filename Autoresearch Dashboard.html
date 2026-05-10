@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>Autoresearch Dashboard</title>
+<link rel="stylesheet" href="https://unpkg.com/xterm@5.3.0/css/xterm.css"/>
+<script src="https://unpkg.com/xterm@5.3.0/lib/xterm.js"></script>
+<script src="https://unpkg.com/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
+<style>
+:root {
+  --bg:     #0d1117; --panel: #161b24; --border: #21293a;
+  --text:   #c9d1d9; --dim:   #6e7681;
+  --green:  #3fb950; --blue:  #58a6ff; --orange: #ffa657;
+  --cyan:   #39c5cf; --yellow:#e3b341; --red:    #f85149;
+  --purple: #bc8cff;
+  --mono: 'JetBrains Mono','Fira Code',monospace;
+  --sans: 'Inter',system-ui,sans-serif;
+}
+*,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
+html,body { height:100%; overflow:hidden; font-family:var(--sans); font-size:13px; background:var(--bg); color:var(--text); }
+
+/* ── Layout ─────────────────────────────── */
+#app { display:grid; grid-template-rows:48px 1fr; grid-template-columns:288px 1fr 256px; height:100vh; }
+
+/* ── Topbar ──────────────────────────────── */
+#topbar {
+  grid-column:1/-1; background:var(--panel); border-bottom:1px solid var(--border);
+  display:flex; align-items:center; padding:0 14px; gap:12px;
+}
+.tb-brand { font-family:var(--mono); font-size:13px; color:#fff; font-weight:500; white-space:nowrap; }
+.tb-sep   { width:1px; height:18px; background:var(--border); flex-shrink:0; }
+.tb-lbl   { font-size:11px; color:var(--dim); white-space:nowrap; }
+.tb-val   { font-family:var(--mono); font-size:11px; color:var(--text); }
+.tb-val.green  { color:var(--green); }
+.tb-val.blue   { color:var(--blue); }
+.tb-spacer { flex:1; }
+
+/* Loop controls in topbar */
+.loop-ctrls { display:flex; align-items:center; gap:8px; }
+.lbtn {
+  padding:5px 12px; border-radius:4px; font-size:11px; font-family:var(--mono);
+  cursor:pointer; border:1px solid; transition:all 0.15s; white-space:nowrap;
+}
+.lbtn.start { background:#0d2818; color:var(--green); border-color:#1f4a2a; }
+.lbtn.start:hover { background:#183828; }
+.lbtn.pause { background:#1a1f2a; color:var(--dim); border-color:var(--border); }
+.lbtn.pause:hover { color:var(--text); border-color:var(--blue); }
+.lbtn.stop  { background:#2a0a08; color:var(--red);  border-color:#4a1010; }
+.lbtn.stop:hover { background:#3a1010; }
+.iter-input {
+  width:44px; background:var(--bg); border:1px solid var(--border);
+  border-radius:4px; color:var(--text); font-family:var(--mono); font-size:11px;
+  padding:4px 6px; text-align:center; outline:none;
+}
+.iter-input:focus { border-color:var(--blue); }
+.dry-run { display:flex; align-items:center; gap:5px; font-size:11px; color:var(--dim); cursor:pointer; padding:4px 8px; border-radius:4px; border:1px solid transparent; }
+.dry-run:hover { border-color:var(--border); color:var(--text); }
+.dry-run input { accent-color:var(--orange); cursor:pointer; }
+.dry-run.active { color:var(--orange); border-color:#4a2a10; background:#1a1008; }
+
+.pill { padding:2px 8px; border-radius:20px; font-size:11px; font-family:var(--mono); }
+.pill.running { background:#0d2818; color:var(--green); border:1px solid #1f4a2a; }
+.pill.idle    { background:#1a1f2a; color:var(--dim);   border:1px solid var(--border); }
+.pill.paused  { background:#1a1a08; color:var(--yellow);border:1px solid #3a3010; }
+.ws-dot { width:7px; height:7px; border-radius:50%; background:var(--dim); flex-shrink:0; }
+.ws-dot.connected { background:var(--green); }
+.ws-dot.demo { background:var(--yellow); }
+
+/* ── Left panel ──────────────────────────── */
+#left { border-right:1px solid var(--border); overflow-y:auto; padding:14px; display:flex; flex-direction:column; gap:16px; }
+.pane-title { font-size:10px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:var(--dim); margin-bottom:8px; }
+
+label.field-lbl { display:block; font-size:10px; color:var(--dim); margin-bottom:4px; }
+.field-input {
+  width:100%; background:var(--bg); border:1px solid var(--border); border-radius:4px;
+  padding:6px 8px; font-family:var(--mono); font-size:11px; color:var(--text); outline:none;
+  transition:border-color .15s; resize:none;
+}
+.field-input:focus { border-color:var(--blue); }
+.field-input::placeholder { color:var(--dim); }
+
+.prompt-preview {
+  background:var(--bg); border:1px solid var(--border); border-radius:4px;
+  padding:6px 8px; font-family:var(--mono); font-size:10px; color:var(--cyan);
+  line-height:1.6; word-break:break-all; margin-top:6px;
+}
+.prompt-preview .lbl { color:var(--dim); font-size:9px; display:block; margin-bottom:2px; }
+
+/* Stages pipeline */
+.stages { display:flex; flex-direction:column; gap:2px; }
+.stage {
+  border:1px solid var(--border); border-radius:5px; overflow:hidden;
+  transition:border-color .15s;
+}
+.stage.active  { border-color:var(--blue); }
+.stage.done    { border-color:#1f4a2a; }
+.stage.error   { border-color:#4a1010; }
+.stage.confirm { border-color:#3a3010; }
+.stage-head {
+  display:flex; align-items:center; gap:6px; padding:7px 9px;
+  cursor:pointer; user-select:none; background:var(--panel);
+}
+.stage-head:hover { background:#1a2030; }
+.snum  { font-family:var(--mono); font-size:9px; color:var(--dim); width:14px; flex-shrink:0; text-align:right; }
+.sname { font-size:12px; color:var(--text); flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.sname.active  { color:var(--blue); }
+.sname.done    { color:var(--green); }
+.sname.error   { color:var(--red); }
+.sname.confirm { color:var(--yellow); }
+
+/* Stage status icons */
+.sicon { width:14px; height:14px; flex-shrink:0; display:flex; align-items:center; justify-content:center; }
+.sicon .dot     { width:7px; height:7px; border-radius:50%; }
+.sicon .dot.idle{ background:var(--border); }
+.sicon .dot.done{ background:var(--green); }
+.sicon .dot.err { background:var(--red); }
+.sicon .dot.conf{ background:var(--yellow); }
+.sicon .spin    { width:10px; height:10px; border-radius:50%; border:1.5px solid var(--border); border-top-color:var(--blue); animation:spin .8s linear infinite; }
+@keyframes spin { to { transform:rotate(360deg); } }
+.sicon .skip    { width:10px; height:2px; background:var(--dim); border-radius:1px; }
+
+/* Stage log link */
+.slog { font-family:var(--mono); font-size:9px; color:var(--dim); text-decoration:none; cursor:pointer; }
+.slog:hover { color:var(--blue); }
+
+/* Stage body (expanded) */
+.stage-body { display:none; padding:8px 9px; border-top:1px solid var(--border); background:var(--bg); }
+.stage-body.open { display:block; }
+.stage-script {
+  width:100%; background:var(--panel); border:1px solid var(--border); border-radius:3px;
+  padding:6px 8px; font-family:var(--mono); font-size:10px; color:var(--cyan);
+  resize:vertical; min-height:48px; outline:none; line-height:1.6;
+}
+.stage-script:focus { border-color:var(--blue); }
+.stage-actions { display:flex; gap:6px; margin-top:6px; align-items:center; }
+.s-confirm-btn {
+  padding:3px 10px; background:#1f1a08; border:1px solid #3a3010;
+  border-radius:3px; color:var(--yellow); font-size:10px; font-family:var(--mono); cursor:pointer;
+}
+.s-confirm-btn:hover { background:#2f2a10; }
+.s-reorder { display:flex; gap:2px; margin-left:4px; flex-shrink:0; }
+.s-arrow {
+  background:none; border:1px solid var(--border); border-radius:2px;
+  color:var(--dim); font-size:9px; width:16px; height:16px;
+  cursor:pointer; padding:0; display:flex; align-items:center; justify-content:center;
+  transition:all .15s;
+}
+.s-arrow:hover:not([disabled]) { border-color:var(--blue); color:var(--blue); }
+.s-arrow[disabled] { opacity:.25; cursor:default; }
+
+.add-stage-btn {
+  display:flex; align-items:center; justify-content:center; gap:4px;
+  padding:6px; border:1px dashed var(--border); border-radius:4px;
+  color:var(--dim); font-size:11px; cursor:pointer; margin-top:2px;
+  transition:all .15s;
+}
+.add-stage-btn:hover { border-color:var(--blue); color:var(--blue); }
+
+/* ── Center — dual terminals ─────────────── */
+#center { display:flex; flex-direction:column; background:#0a0e14; position:relative; overflow:hidden; }
+.term-wrap { position:relative; flex:1; min-height:0; overflow:hidden; }
+.term-wrap#term-cli-wrap { flex:0 0 38%; border-top:1px solid var(--border); }
+.term-label {
+  position:absolute; top:0; left:0; right:0; z-index:10;
+  display:flex; align-items:center; gap:8px;
+  padding:3px 10px; background:rgba(13,17,23,.85);
+  border-bottom:1px solid var(--border); font-size:10px; color:var(--dim);
+  backdrop-filter:blur(4px);
+}
+.term-label .tl-dot { width:6px; height:6px; border-radius:50%; background:var(--border); }
+.term-label .tl-dot.active { background:var(--green); }
+.term-inner { position:absolute; inset:22px 0 0 0; padding:4px; }
+
+/* Divider handle */
+#divider {
+  height:4px; background:var(--border); cursor:row-resize; flex-shrink:0;
+  transition:background .15s;
+}
+#divider:hover { background:var(--blue); }
+
+/* ── Right panel ─────────────────────────── */
+#right { border-left:1px solid var(--border); display:flex; flex-direction:column; overflow:hidden; }
+.r-sec { padding:12px 12px; border-bottom:1px solid var(--border); }
+.r-sec.grow { flex:1; overflow-y:auto; }
+
+/* Version history (same as before) */
+.branch-row { font-size:11px; color:var(--dim); margin-bottom:10px; }
+.branch-name { font-family:var(--mono); color:var(--purple); }
+.commit-list { display:flex; flex-direction:column; gap:2px; }
+.commit { border:1px solid var(--border); border-radius:4px; padding:7px 9px; cursor:pointer; transition:all .15s; }
+.commit:hover { border-color:#3a4560; background:#1a2030; }
+.commit.current { border-color:var(--blue); background:#0d1828; }
+.commit-head { display:flex; align-items:center; gap:5px; margin-bottom:3px; }
+.c-badge { font-size:9px; font-weight:600; padding:1px 5px; border-radius:3px; flex-shrink:0; }
+.bg-keep     { background:#0d2818; color:var(--green); border:1px solid #1f4a2a; }
+.bg-discard  { background:#1f1a08; color:var(--yellow); border:1px solid #3a3010; }
+.bg-crash    { background:#2a0a08; color:var(--red);    border:1px solid #4a1010; }
+.bg-baseline { background:#0d1828; color:var(--blue);   border:1px solid #1a3a5c; }
+.c-iter { font-family:var(--mono); font-size:11px; color:var(--dim); }
+.c-hash { font-family:var(--mono); font-size:10px; color:var(--dim); margin-left:auto; }
+.c-head-dot { width:7px; height:7px; border-radius:50%; background:var(--blue); flex-shrink:0; }
+.c-metric { font-family:var(--mono); font-size:12px; color:var(--text); margin-bottom:2px; }
+.c-delta.better { color:var(--green); font-size:10px; }
+.c-delta.worse  { color:var(--red);   font-size:10px; }
+.c-files { display:flex; flex-wrap:wrap; gap:2px; margin-bottom:5px; }
+.c-file { font-family:var(--mono); font-size:9px; color:var(--dim); padding:1px 4px; background:var(--bg); border:1px solid var(--border); border-radius:2px; max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.apply-btn { display:block; width:100%; background:transparent; border:1px solid var(--border); border-radius:3px; padding:4px; font-size:10px; font-family:var(--mono); color:var(--dim); cursor:pointer; transition:all .15s; }
+.apply-btn:hover { border-color:var(--blue); color:var(--blue); background:#0d1828; }
+.commit.current .apply-btn { opacity:.4; pointer-events:none; }
+
+/* Stage logs panel */
+.log-iter-row { display:flex; align-items:center; gap:6px; margin-bottom:8px; }
+.log-iter-sel { flex:1; background:var(--bg); border:1px solid var(--border); border-radius:4px; padding:4px 7px; font-family:var(--mono); font-size:10px; color:var(--text); outline:none; }
+.log-cur-btn { padding:3px 7px; background:#0d1828; border:1px solid #1a3a5c; border-radius:3px; font-size:10px; font-family:var(--mono); color:var(--blue); cursor:pointer; white-space:nowrap; }
+.log-cur-btn:hover { background:#1a2838; }
+.stage-log-row { display:flex; align-items:center; gap:6px; padding:5px 0; border-bottom:1px solid var(--border); }
+.stage-log-row:last-child { border-bottom:none; }
+.slr-dot { width:6px; height:6px; border-radius:50%; flex-shrink:0; }
+.slr-info { flex:1; min-width:0; }
+.slr-name { font-family:var(--mono); font-size:11px; color:var(--text); }
+.slr-path { font-size:10px; color:var(--dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.slr-size { font-family:var(--mono); font-size:10px; color:var(--dim); flex-shrink:0; }
+.uncommitted-note { font-size:10px; color:var(--yellow); padding:6px; background:#1f1a08; border-radius:3px; margin-top:6px; line-height:1.5; }
+
+/* Toast */
+#toast { position:fixed; bottom:20px; left:50%; transform:translateX(-50%) translateY(40px); background:#1a2030; border:1px solid var(--blue); border-radius:6px; padding:9px 16px; font-size:12px; color:var(--text); transition:transform .25s,opacity .25s; opacity:0; pointer-events:none; z-index:999; white-space:nowrap; }
+#toast.show { transform:translateX(-50%) translateY(0); opacity:1; }
+</style>
+</head>
+<body>
+<div id="app">
+
+<!-- Topbar -->
+<div id="topbar">
+  <span class="tb-brand">autoresearch/</span>
+  <div class="tb-sep"></div>
+  <span class="tb-lbl">状态</span> <span id="tb-status"><span class="pill idle">idle</span></span>
+  <div class="tb-sep"></div>
+  <span class="tb-lbl">轮次</span> <span class="tb-val blue" id="tb-iter">—</span>
+  <span class="tb-lbl">阶段</span> <span class="tb-val" id="tb-phase">—</span>
+  <span class="tb-lbl">最优</span> <span class="tb-val green" id="tb-best">—</span>
+  <div class="tb-spacer"></div>
+  <!-- Loop controls -->
+  <div class="loop-ctrls">
+    <button class="lbtn start" id="btn-start" onclick="loopAction('start')">▶ Start</button>
+    <button class="lbtn pause" id="btn-pause" onclick="loopAction('pause')">⏸ Pause</button>
+    <button class="lbtn stop"  id="btn-stop"  onclick="loopAction('stop')">⏹</button>
+    <span class="tb-lbl">×</span>
+    <input class="iter-input" id="iter-count" type="number" value="20" min="1" max="999"/>
+    <label class="dry-run" id="dry-run-lbl">
+      <input type="checkbox" id="dry-run-cb" onchange="toggleDryRun(this)"/> Dry Run
+    </label>
+  </div>
+  <div class="tb-sep"></div>
+  <div style="display:flex;align-items:center;gap:5px;">
+    <div class="ws-dot demo" id="ws-dot"></div>
+    <span style="font-size:11px;color:var(--dim)" id="ws-label">demo</span>
+  </div>
+</div>
+
+<!-- Left panel -->
+<aside id="left">
+
+  <!-- Skill & Scope -->
+  <div>
+    <div class="pane-title">Skill &amp; Scope</div>
+    <label class="field-lbl">Skill 绝对路径</label>
+    <input class="field-input" id="skill-path" type="text" placeholder="/home/sean/.claude/skills/autoresearch" value="/home/sean/.claude/skills/autoresearch"/>
+    <label class="field-lbl" style="margin-top:6px">Skill 名称</label>
+    <input class="field-input" id="skill-name" type="text" placeholder="struct_cache_opt" value="struct_cache_opt"/>
+    <label class="field-lbl" style="margin-top:6px">Scope（自然语言）</label>
+    <textarea class="field-input" id="scope-nl" rows="2" placeholder="optimize struct layout and cache alignment in the ANGLE rendering pipeline">optimize struct layout and cache alignment in the ANGLE rendering pipeline</textarea>
+    <div class="prompt-preview">
+      <span class="lbl">Stage 1 CLI 调用</span>
+      <span id="prompt-preview">claude --skill /home/sean/.claude/skills/autoresearch/SKILL.md \
+  -p "use struct_cache_opt optimize struct layout and cache alignment in the ANGLE rendering pipeline"</span>
+    </div>
+  </div>
+
+  <!-- Setup Stages -->
+  <div>
+    <div class="pane-title" style="display:flex;align-items:center;justify-content:space-between">
+      Setup Stages
+      <span style="font-size:10px;color:var(--dim);font-weight:400;text-transform:none;letter-spacing:0">每阶段独立日志</span>
+    </div>
+    <div class="stages" id="stage-list"></div>
+    <div class="add-stage-btn" onclick="addStage()">＋ Add Stage</div>
+  </div>
+
+</aside>
+
+<!-- Center: dual terminals -->
+<div id="center">
+  <div class="term-wrap" id="term-main-wrap">
+    <div class="term-label">
+      <div class="tl-dot active" id="main-dot"></div>
+      Main Terminal — 系统 / 用户输入
+    </div>
+    <div class="term-inner" id="term-main"></div>
+  </div>
+  <div id="divider"></div>
+  <div class="term-wrap" id="term-cli-wrap">
+    <div class="term-label">
+      <div class="tl-dot" id="cli-dot"></div>
+      Copilot CLI — Stage 1 专用
+    </div>
+    <div class="term-inner" id="term-cli"></div>
+  </div>
+</div>
+
+<!-- Right panel -->
+<div id="right">
+
+  <!-- Version history -->
+  <div class="r-sec grow">
+    <div class="pane-title">版本历史</div>
+    <div class="branch-row">branch <span class="branch-name" id="git-branch">main</span></div>
+    <div class="commit-list" id="commit-list"></div>
+  </div>
+
+  <!-- Stage logs -->
+  <div class="r-sec" style="border-bottom:none;flex-shrink:0;max-height:280px;overflow-y:auto">
+    <div class="pane-title">阶段日志</div>
+    <div class="log-iter-row">
+      <select class="log-iter-sel" id="log-iter-sel">
+        <option value="current">📍 Current (uncommitted)</option>
+        <option value="3">iter 3</option>
+        <option value="2">iter 2</option>
+        <option value="1">iter 1</option>
+      </select>
+      <button class="log-cur-btn" onclick="viewCurrentLogs()">Now</button>
+    </div>
+    <div id="stage-log-list"></div>
+    <div class="uncommitted-note" id="uncommitted-note">
+      当前节点尚未 commit。阶段 5 完成后数据将归档至版本历史。
+    </div>
+  </div>
+
+</div>
+
+</div><!-- #app -->
+<div id="toast"></div>
+
+<script>
+// ─── xterm.js ────────────────────────────────────────────────────────────────
+
+const TERM_THEME = {
+  background:'#0a0e14', foreground:'#c9d1d9', cursor:'#58a6ff',
+  black:'#0a0e14', brightBlack:'#6e7681',
+  red:'#f85149', green:'#3fb950', yellow:'#e3b341',
+  blue:'#58a6ff', magenta:'#bc8cff', cyan:'#39c5cf', white:'#c9d1d9',
+};
+
+function makeTerm(elId) {
+  const t = new Terminal({ theme:TERM_THEME, fontFamily:"'JetBrains Mono','Fira Code',monospace", fontSize:12, lineHeight:1.45, cursorBlink:true });
+  const fit = new FitAddon.FitAddon();
+  t.loadAddon(fit);
+  t.open(document.getElementById(elId));
+  fit.fit();
+  return { term:t, fit };
+}
+
+const main = makeTerm('term-main');
+const cli  = makeTerm('term-cli');
+main.term.focus();
+
+// Resize both on window resize
+new ResizeObserver(() => { main.fit.fit(); cli.fit.fit(); }).observe(document.getElementById('center'));
+
+// ─── Divider drag to resize ───────────────────────────────────────────────────
+
+const divider   = document.getElementById('divider');
+const cliWrap   = document.getElementById('term-cli-wrap');
+const centerEl  = document.getElementById('center');
+let dragging    = false;
+
+divider.addEventListener('mousedown', e => { dragging = true; e.preventDefault(); });
+document.addEventListener('mousemove', e => {
+  if (!dragging) return;
+  const rect = centerEl.getBoundingClientRect();
+  const pct  = Math.max(20, Math.min(70, (1 - (e.clientY - rect.top) / rect.height) * 100));
+  cliWrap.style.flex = `0 0 ${pct}%`;
+  main.fit.fit(); cli.fit.fit();
+});
+document.addEventListener('mouseup', () => { dragging = false; });
+
+// ─── Prompt preview ───────────────────────────────────────────────────────────
+
+function updatePrompt() {
+  const path  = document.getElementById('skill-path').value.trim() || '/path/to/skills/autoresearch';
+  const skill = document.getElementById('skill-name').value.trim() || '<skill>';
+  const scope = document.getElementById('scope-nl').value.trim() || '<scope>';
+  document.getElementById('prompt-preview').textContent =
+    `claude --skill ${path}/SKILL.md \\\n  -p "use ${skill} ${scope}"`;
+}
+document.getElementById('skill-path').addEventListener('input', updatePrompt);
+document.getElementById('skill-name').addEventListener('input', updatePrompt);
+document.getElementById('scope-nl').addEventListener('input', updatePrompt);
+
+// ─── Stage management ─────────────────────────────────────────────────────────
+
+let stages = [
+  { id:0, name:'Init & Copilot Login',
+    script:'gh auth login --with-token < ~/.gh-token\n# Confirm user is authenticated',
+    manual:true, status:'confirm', log:'stage-0.log', expanded:true },
+  { id:1, name:'Generate Diff (Skills CLI)',
+    script:'# Claude Code skill invocation\n# Path and prompt auto-derived from Skill config above\n# claude --skill ${SKILL_PATH}/SKILL.md \\\n#   -p "use ${SKILL_NAME} ${SCOPE}" < .ar-context.txt > .ar.patch',
+    manual:false, status:'idle', log:'stage-1.log', expanded:false },
+  { id:2, name:'Apply Diff',
+    script:'git apply --check .ar.patch && git apply .ar.patch',
+    manual:false, status:'idle', log:'stage-2.log', expanded:false },
+  { id:3, name:'Build & Health Test',
+    script:'autoninja -C out/Release angle_perftests 2>&1 | tee stage-3.log\necho "Building..."',
+    manual:false, status:'idle', log:'stage-3.log', expanded:false },
+  { id:4, name:'Benchmark & Health Test',
+    script:"perf stat -e cpu-cycles ./out/Release/angle_perftests \\\n  --gtest_filter='*DrawQuad*' --iterations=100 2>&1 | tee stage-4.log",
+    manual:false, status:'idle', log:'stage-4.log', expanded:false },
+  { id:5, name:'Extract Perf & Commit',
+    script:'# auto: extract metric from stage-4.log\n# git add -A\n# git commit -m "experiment: iter N  cycles=$(metric)"\n# All stage logs archived with commit',
+    manual:false, status:'idle', log:'stage-5.log', expanded:false },
+  { id:6, name:'Auto Search Schedule',
+    script:'# Recursive skill call: optimize the OPTIMIZATION APPROACH itself\n# Passes git log + TSV history as context → skill proposes next diff\n# claude --skill ${SKILL_PATH}/SKILL.md \\\n#   -p "/autoresearch\\nIterations: 1\\n$(git log -20 --oneline)\\n$(tail -20 results.tsv)"\n#\n# This IS the loop driver: Stage 6 → Stage 1 → Stage 2 → ... → Stage 6',
+    manual:false, status:'idle', log:'stage-6.log', expanded:false },
+];
+
+function iconHtml(status) {
+  if (status === 'running') return '<div class="spin"></div>';
+  if (status === 'done')    return '<div class="dot done"></div>';
+  if (status === 'error')   return '<div class="dot err"></div>';
+  if (status === 'confirm') return '<div class="dot conf"></div>';
+  if (status === 'skipped') return '<div class="skip"></div>';
+  return '<div class="dot idle"></div>';
+}
+
+function renderStages() {
+  const isDry = document.getElementById('dry-run-cb').checked;
+  const list  = document.getElementById('stage-list');
+  list.innerHTML = stages.map((s, i) => {
+    const cls = s.status === 'running' ? 'active'
+              : s.status === 'done'    ? 'done'
+              : s.status === 'error'   ? 'error'
+              : s.status === 'confirm' ? 'confirm' : '';
+    const skip = isDry && s.id === 1;
+    return `
+    <div class="stage ${cls}" id="stage-${s.id}">
+      <div class="stage-head" onclick="toggleStage(${i})">
+        <span class="snum">${s.id}</span>
+        <div class="sicon">${skip ? '<div class="skip"></div>' : iconHtml(s.status)}</div>
+        <span class="sname ${cls}">${esc(s.name)}${skip ? ' <span style="color:var(--dim);font-size:9px">[dry run skip]</span>' : ''}</span>
+        ${s.log ? `<a class="slog" onclick="event.stopPropagation();openLog('${s.log}')" title="${s.log}">log</a>` : ''}
+        <span class="s-reorder" onclick="event.stopPropagation()">
+          <button class="s-arrow" onclick="moveStage(${i},-1)" ${i===0?'disabled':''}>▲</button>
+          <button class="s-arrow" onclick="moveStage(${i}, 1)" ${i===stages.length-1?'disabled':''}>▼</button>
+        </span>
+      </div>
+      <div class="stage-body ${s.expanded ? 'open' : ''}" id="sbody-${i}">
+        <textarea class="stage-script" rows="3" oninput="stages[${i}].script=this.value">${esc(s.script)}</textarea>
+        <div class="stage-actions">
+          ${s.manual ? `<button class="s-confirm-btn" onclick="confirmStage(${i})">✓ Confirm &amp; Continue</button>` : ''}
+          <span class="s-del-btn" onclick="removeStage(${i})">✕ Remove</span>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function toggleStage(i) {
+  stages[i].expanded = !stages[i].expanded;
+  renderStages();
+}
+
+function confirmStage(i) {
+  stages[i].status = 'done';
+  renderStages();
+  showToast(`Stage ${stages[i].id} confirmed — continuing`);
+}
+
+function addStage() {
+  const id = stages.length;
+  stages.push({ id, name:`Stage ${id}`, script:'# your script here', manual:false, status:'idle', log:`stage-${id}.log`, expanded:true });
+  renderStages();
+}
+
+function moveStage(i, dir) {
+  const j = i + dir;
+  if (j < 0 || j >= stages.length) return;
+  [stages[i], stages[j]] = [stages[j], stages[i]];
+  renderStages();
+}
+
+function removeStage(i) {
+  stages.splice(i, 1);
+  renderStages();
+}
+
+function openLog(name) {
+  showToast(`Opening ${name} in terminal`);
+  main.term.write(`\r\n\x1b[90m$ cat ${name}\x1b[0m\r\n`);
+}
+
+renderStages();
+
+// ─── Loop controls ────────────────────────────────────────────────────────────
+
+function loopAction(action) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type:'loop', action, iterations: +document.getElementById('iter-count').value }));
+  } else {
+    if (action === 'start') {
+      document.getElementById('tb-status').innerHTML = '<span class="pill running">running</span>';
+      showToast('Demo: loop started');
+    } else if (action === 'pause') {
+      document.getElementById('tb-status').innerHTML = '<span class="pill paused">paused</span>';
+      showToast('Demo: loop paused');
+    } else {
+      document.getElementById('tb-status').innerHTML = '<span class="pill idle">stopped</span>';
+      showToast('Demo: loop stopped');
+    }
+  }
+}
+
+function toggleDryRun(cb) {
+  document.getElementById('dry-run-lbl').classList.toggle('active', cb.checked);
+  renderStages();
+  if (ws && ws.readyState === WebSocket.OPEN)
+    ws.send(JSON.stringify({ type:'config', dryRun: cb.checked }));
+}
+
+// ─── Log panel ────────────────────────────────────────────────────────────────
+
+const STAGE_LOGS = [
+  { name:'stage-0.log', stage:'Init',      size:'1 KB',   exists:true  },
+  { name:'stage-1.log', stage:'Gen Diff',  size:'4 KB',   exists:true  },
+  { name:'stage-2.log', stage:'Apply',     size:'0.5 KB', exists:true  },
+  { name:'stage-3.log', stage:'Build',     size:'318 KB', exists:true  },
+  { name:'stage-4.log', stage:'Benchmark', size:'12 KB',  exists:true  },
+  { name:'stage-5.log', stage:'Commit',    size:'2 KB',   exists:false },
+  { name:'stage-6.log', stage:'Schedule',  size:'—',      exists:false },
+];
+
+function renderStageLogs(iter) {
+  const list  = document.getElementById('stage-log-list');
+  const note  = document.getElementById('uncommitted-note');
+  const isCur = iter === 'current';
+  note.style.display = isCur ? 'block' : 'none';
+  list.innerHTML = STAGE_LOGS.map(f => {
+    const exists = isCur ? f.exists : true;
+    return `
+    <div class="stage-log-row">
+      <div class="slr-dot" style="background:${exists ? 'var(--green)' : 'var(--border)'}"></div>
+      <div class="slr-info">
+        <div class="slr-name" onclick="openLog('${f.name}')" style="cursor:pointer">${f.name}</div>
+        <div class="slr-path">${f.stage}</div>
+      </div>
+      <span class="slr-size">${exists ? f.size : '—'}</span>
+    </div>`;
+  }).join('');
+}
+
+document.getElementById('log-iter-sel').addEventListener('change', e => renderStageLogs(e.target.value));
+function viewCurrentLogs() {
+  document.getElementById('log-iter-sel').value = 'current';
+  renderStageLogs('current');
+}
+renderStageLogs('current');
+
+// ─── Version history ──────────────────────────────────────────────────────────
+
+function renderHistory(msg) {
+  document.getElementById('git-branch').textContent = msg.branch || 'main';
+  const list = document.getElementById('commit-list');
+  if (!msg.commits?.length) { list.innerHTML = '<div style="font-size:11px;color:var(--dim);padding:6px 0">No experiment commits yet</div>'; return; }
+  list.innerHTML = msg.commits.map(c => {
+    const bgCls = `bg-${c.status}`;
+    const mFmt  = c.metric != null ? Number(c.metric).toLocaleString() : '—';
+    const dHtml = c.delta != null
+      ? (c.delta < 0 ? `<span class="c-delta better"> ${Number(c.delta).toLocaleString()}</span>`
+                     : `<span class="c-delta worse"> +${Number(c.delta).toLocaleString()}</span>`) : '';
+    const filesHtml = c.files.map(f => `<span class="c-file" title="${esc(f)}">${esc(f.split('/').pop())}</span>`).join('');
+    return `
+    <div class="commit ${c.isCurrent?'current':''}" data-hash="${c.hash}">
+      <div class="commit-head">
+        ${c.isCurrent ? '<div class="c-head-dot"></div>' : ''}
+        <span class="c-badge ${bgCls}">${c.status.toUpperCase()}</span>
+        <span class="c-iter">iter ${c.iter}</span>
+        <span class="c-hash">${c.hash}</span>
+      </div>
+      <div class="c-metric">${mFmt}${dHtml}</div>
+      <div class="c-files">${filesHtml}</div>
+      <button class="apply-btn" onclick="applyCommit('${c.hash}')">${c.isCurrent ? '✓ current HEAD' : '⏎ Apply this version'}</button>
+    </div>`;
+  }).join('');
+}
+
+renderHistory({
+  branch:'main',
+  commits:[
+    { hash:'c9e3f21',iter:3,status:'keep',    metric:1234567890,delta:-415432110,files:['src/libANGLE/Context.h'],isCurrent:true  },
+    { hash:'d8b2a10',iter:2,status:'discard', metric:1780000000,delta:130000000, files:['src/libANGLE/Program.h'],isCurrent:false },
+    { hash:'b1c4e09',iter:1,status:'keep',    metric:1650000000,delta:-150000000,files:['src/libANGLE/State.h'],  isCurrent:false },
+    { hash:'a3f9d1c',iter:0,status:'baseline',metric:1800000000,delta:null,      files:[],                        isCurrent:false },
+  ],
+});
+
+function applyCommit(hash) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type:'apply', hash }));
+  } else {
+    document.querySelectorAll('.commit').forEach(el => {
+      const isCur = el.dataset.hash === hash;
+      el.classList.toggle('current', isCur);
+      const btn = el.querySelector('.apply-btn');
+      if (btn) btn.textContent = isCur ? '✓ current HEAD' : '⏎ Apply this version';
+    });
+    showToast(`Demo: git reset --hard ${hash}`);
+  }
+}
+
+// ─── WebSocket ────────────────────────────────────────────────────────────────
+
+let ws = null;
+
+main.term.onData(d => {
+  if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type:'input', data:d }));
+  else { if(d==='\r') main.term.write('\r\n'); else if(d==='\x7f') main.term.write('\b \b'); else main.term.write(d); }
+});
+main.term.onResize(({cols,rows}) => { if(ws?.readyState===WebSocket.OPEN) ws.send(JSON.stringify({type:'resize',cols,rows})); });
+
+function connectWS() {
+  try {
+    ws = new WebSocket(`ws://${location.host}`);
+    ws.onopen  = () => { document.getElementById('ws-dot').className='ws-dot connected'; document.getElementById('ws-label').textContent='已连接'; };
+    ws.onclose = () => { document.getElementById('ws-dot').className='ws-dot demo'; document.getElementById('ws-label').textContent='demo'; ws=null; startDemo(); };
+    ws.onmessage = e => {
+      const m = JSON.parse(e.data);
+      if (m.type==='pty')     main.term.write(m.data);
+      if (m.type==='cli')     cli.term.write(m.data);
+      if (m.type==='status')  updateStatus(m);
+      if (m.type==='history') renderHistory(m);
+      if (m.type==='toast')   showToast(m.msg);
+    };
+  } catch { setTimeout(startDemo, 0); }
+}
+
+function updateStatus(m) {
+  document.getElementById('tb-iter').textContent  = m.iter ? `${m.iter} / ${m.total}` : '—';
+  document.getElementById('tb-phase').textContent = m.phase || '—';
+  if (m.best != null) document.getElementById('tb-best').textContent = Number(m.best).toLocaleString();
+  if (m.stage != null) setStageStatus(m.stage, m.stageStatus || 'running');
+}
+
+function setStageStatus(id, status) {
+  const s = stages.find(x => x.id === id);
+  if (s) { s.status = status; renderStages(); }
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function esc(s) { return String(s).replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+// ─── Demo simulation ──────────────────────────────────────────────────────────
+
+let demoRunning = false;
+const G='\x1b[32m',Y='\x1b[33m',B='\x1b[34m',C='\x1b[36m',R='\x1b[31m',D='\x1b[2m',M='\x1b[35m',O='\x1b[38;5;208m',W='\x1b[0m',N='\r\n';
+
+function startDemo() {
+  if (demoRunning) return;
+  demoRunning = true;
+  document.getElementById('tb-status').innerHTML = '<span class="pill running">running</span>';
+  document.getElementById('tb-iter').textContent = '1 / 20';
+
+  main.term.write(`${D}[autoresearch] demo mode — simulating pipeline${W}${N}${N}`);
+  cli.term.write(`${D}GitHub Copilot CLI${W}${N}`);
+
+  const seq = [
+    [300,  () => { main.term.write(`${D}── Stage 0: Init & Copilot Login ──${W}${N}`); setStageStatus(0,'running'); }],
+    [600,  () => { main.term.write(`${G}✓ Copilot CLI authenticated${W}${N}`); setStageStatus(0,'done'); }],
+    [400,  () => { main.term.write(`${N}${D}── Stage 1: Generate Diff ──${W}${N}`); setStageStatus(1,'running'); document.getElementById('cli-dot').classList.add('active'); }],
+    [200,  () => { cli.term.write(`${D}$ gh copilot suggest -t shell${W}${N}`); }],
+    [800,  () => { cli.term.write(`${C}Analyzing ANGLE rendering pipeline...${W}${N}`); }],
+    [700,  () => { cli.term.write(`${C}Generating struct layout optimization...${W}${N}`); }],
+    [600,  () => { cli.term.write(`${G}diff --git a/src/libANGLE/Context.h b/src/libANGLE/Context.h${W}${N}+  alignas(64) ContextState mState;${N}+  __builtin_prefetch(&mState, 0, 3);${N}`); }],
+    [300,  () => { setStageStatus(1,'done'); document.getElementById('cli-dot').classList.remove('active'); }],
+    [200,  () => { main.term.write(`${N}${D}── Stage 2: Apply Diff ──${W}${N}`); setStageStatus(2,'running'); }],
+    [300,  () => { main.term.write(`${G}✓ git apply .ar.patch${W}${N}`); setStageStatus(2,'done'); }],
+    [200,  () => { main.term.write(`${N}${D}── Stage 3: Build & Health Test ──${W}${N}`); setStageStatus(3,'running'); }],
+    [1200, () => { main.term.write(`${D}Building... (logs → stage-3.log)${W}${N}`); }],
+    [900,  () => { main.term.write(`${G}✓ Build succeeded${W}${N}`); setStageStatus(3,'done'); }],
+    [200,  () => { main.term.write(`${N}${D}── Stage 4: Benchmark ──${W}${N}`); setStageStatus(4,'running'); }],
+    [1000, () => { main.term.write(`${D}Running perf stat... (logs → stage-4.log)${W}${N}`); }],
+    [700,  () => { main.term.write(`${G}  1,234,567,890${W} cpu-cycles${N}`); setStageStatus(4,'done'); }],
+    [200,  () => { main.term.write(`${N}${D}── Stage 5: Extract Perf & Commit ──${W}${N}`); setStageStatus(5,'running'); }],
+    [400,  () => { main.term.write(`${D}git commit -m "experiment: iter 4  cycles=1234567890"${W}${N}`); }],
+    [300,  () => { main.term.write(`${G}✓ Committed — all stage logs archived${W}${N}`); setStageStatus(5,'done'); }],
+    [200,  () => { main.term.write(`${N}${D}── Stage 6: Auto Search ──${W}${N}`); setStageStatus(6,'running'); }],
+    [400,  () => { main.term.write(`${G}[autoresearch] ✓ keep  metric=1234567890  delta=-415432110${W}${N}`); setStageStatus(6,'done'); document.getElementById('tb-iter').textContent='2 / 20'; }],
+  ];
+
+  let i = 0;
+  function next() { if (i>=seq.length) return; const [d,fn]=seq[i++]; setTimeout(()=>{ fn(); next(); }, d); }
+  next();
+}
+
+setTimeout(() => { if (!ws) startDemo(); }, 1200);
+connectWS();
+</script>
+</body>
+</html>

@@ -1,0 +1,66 @@
+# ─────────────────────────────────────────────────────────────────
+# Autoresearch Loop — 配置文件
+# ─────────────────────────────────────────────────────────────────
+
+goal:    最小化 angle_perftests 的 cpu-cycles
+remote:  ssh -tt -o ServerAliveInterval=30 -o ServerAliveCountMax=3 sean@build-host
+workdir: /home/sean/angle
+
+scope:
+  - src/libANGLE/State.h
+  - src/libANGLE/Program.h
+  - src/libANGLE/Context.h
+
+# ── 1. Skill 本体 ────────────────────────────────────────────────
+# Shell 命令，stdin = context (git log + TSV tail)，stdout = unified diff
+# 可以接任何 LLM 工具：Claude CLI / GitHub Copilot CLI / 本地脚本
+#
+# 示例 A：Python 脚本调 Claude API
+ideatePrompt: |
+  python3 /home/sean/skill/run.py
+#
+# 示例 B：GitHub Copilot CLI
+# ideatePrompt: gh copilot suggest -t shell
+#
+# 示例 C：Claude CLI (claude code)
+# ideatePrompt: claude -p "Read the context below and output a unified diff..."
+
+# ── 2. Terminal 初始化 ────────────────────────────────────────────
+# SSH / PTY 建立后依次执行；用于 gh auth、git config、env export 等
+# 在 loop 开始前运行一次，terminal-dead 重连后也会重新运行
+setupCmds:
+  - gh auth login --with-token < ~/.gh-token   # GitHub CLI 鉴权
+  - git config user.email bot@build-host.local
+  - export CCACHE_DIR=/home/sean/.ccache        # 加速编译
+
+# ── 3. 编译 / 测试脚本 ───────────────────────────────────────────
+# guardCmd:   编译检查，非零 → build-fail → git revert
+# verifyCmd:  性能测试，stdout 末 token 必须是数字 (metric)
+guardCmd: |
+  autoninja -C out/Release angle_perftests 2>&1 | tee build.log
+
+verifyCmd: |
+  perf stat -e cpu-cycles ./out/Release/angle_perftests \
+    --gtest_filter='*DrawQuad*' --iterations=100 2>&1 \
+    | grep cpu-cycles | awk '{print $1}' | tr -d ','
+
+# ── 4. 错误诊断 ───────────────────────────────────────────────────
+# guardCmd / verifyCmd 失败后运行；输出首行追加到 TSV desc 字段
+# 留空则跳过
+diagCmd: |
+  grep -E "^.*error:" build.log | head -5
+
+# ── 5. 性能比较 ───────────────────────────────────────────────────
+# direction:   lower = 越小越好 (cycles / latency / memory)
+#              higher = 越大越好 (throughput / score)
+# metricLabel: 可读标签，写入 TSV 首行注释
+# metricUnit:  单位，仅用于日志显示
+direction:   lower
+metricLabel: cpu-cycles
+metricUnit:  cycles
+
+# ── 调度参数 ─────────────────────────────────────────────────────
+iterations:      20
+plateauPatience: 8
+memoryDepth:     20
+tsvPath:         results.tsv
