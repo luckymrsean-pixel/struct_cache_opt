@@ -55,6 +55,48 @@ export class InteractivePty extends EventEmitter {
   }
 
   /**
+   * SIGTERM → 100ms grace → SIGKILL → wait for onExit → re-spawn.
+   * Emits "restarted" on success, "restart-failed" with reason on failure.
+   *
+   * Concurrent calls are serialized — a second call while one is in-flight
+   * returns the same Promise and does not spawn a duplicate PTY.
+   */
+  private _restartPromise: Promise<void> | null = null;
+
+  async restart(): Promise<void> {
+    if (this._restartPromise) return this._restartPromise;
+    this._restartPromise = this._doRestart()
+      .finally(() => { this._restartPromise = null; });
+    return this._restartPromise;
+  }
+
+  private async _doRestart(): Promise<void> {
+    if (this.proc) {
+      const proc = this.proc;
+      const exited = new Promise<void>((resolve) => {
+        proc.onExit(() => resolve());
+      });
+      try { proc.kill("SIGTERM"); } catch { /* ignore */ }
+      const winner = await Promise.race([
+        exited.then(() => "exit" as const),
+        new Promise<"timeout">((r) => setTimeout(() => r("timeout"), 100)),
+      ]);
+      if (winner === "timeout") {
+        try { proc.kill("SIGKILL"); } catch { /* ignore */ }
+        await exited;
+      }
+    }
+
+    try {
+      await this.start();
+      this.emit("restarted");
+    } catch (e: unknown) {
+      const reason = e instanceof Error ? e.message : String(e);
+      this.emit("restart-failed", { reason });
+    }
+  }
+
+  /**
    * List child processes spawned beneath this PTY's bash, e.g. a running
    * `copilot` or `sleep` command. Returns [] when bash is idle.
    *

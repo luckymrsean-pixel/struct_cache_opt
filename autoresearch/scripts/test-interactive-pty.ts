@@ -97,6 +97,41 @@ async function main(): Promise<void> {
     }
   });
 
+  // ── Test 6: restart() emits 'restarted' and assigns new pid ───────────────
+  await test("restart() kills, respawns, emits 'restarted', new pid differs", async () => {
+    const p = new InteractivePty();
+    await p.start();
+    const oldPid = p.pid;
+    const restarted = new Promise<void>((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error("restarted never fired (10s)")), 10000);
+      p.once("restarted", () => { clearTimeout(t); resolve(); });
+    });
+    await p.restart();
+    await restarted;
+    if (!p.alive) throw new Error("alive=false after restart");
+    if (p.pid === oldPid) throw new Error(`pid did not change: ${p.pid}`);
+    p.dispose();
+  });
+
+  // ── Test 7: restart() kills lingering child processes ─────────────────────
+  await test("restart() kills child processes (sleep)", async () => {
+    const p = new InteractivePty();
+    await p.start();
+    p.write("sleep 60 &\n");
+    await sleep(300);
+    const before = await p.getChildren();
+    if (!before.some((k) => k.cmd.includes("sleep"))) {
+      throw new Error("sleep didn't start");
+    }
+    await p.restart();
+    await sleep(200);
+    const after = await p.getChildren();
+    if (after.length !== 0) {
+      throw new Error(`children survived restart: ${JSON.stringify(after)}`);
+    }
+    p.dispose();
+  });
+
   // ── Summary ──────────────────────────────────────────────────────────────
   const total = passed + failed;
   console.log(`\n${total} tests — ${passed} passed, ${failed} failed`);
