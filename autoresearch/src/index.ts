@@ -2,6 +2,7 @@ import { load } from "./config";
 import { runLoop } from "./loop";
 import { startWebServer } from "./web";
 import { Terminal } from "./terminal";
+import { InteractivePty } from "./interactive-pty";
 
 const cfgPath = process.argv[2] ?? "autoresearch.yml";
 const port    = Number(process.env.AR_PORT ?? 8080);
@@ -14,16 +15,20 @@ process.on("SIGINT", () => {
 const cfg = load(cfgPath);
 
 (async () => {
-  // One PTY shared by the dashboard and the loop. The dashboard's main
-  // terminal pane forwards keystrokes to it, so the operator can do their
-  // manual auth (e.g. `claude login`) before clicking Start. After Start,
-  // the loop runs setupCmds + iterations on the same PTY.
-  const term = new Terminal();
-  await term.start();
+  // Three PTYs: main + cli are interactive (dashboard owns them); loopTerm
+  // runs the loop's automation in isolation so user keystrokes never
+  // collide with marker parsing.
+  const main     = new InteractivePty();
+  const cli      = new InteractivePty();
+  const loopTerm = new Terminal();
 
-  startWebServer(cfg, term, port);
+  await main.start();
+  await cli.start();
+  await loopTerm.start();
 
-  await runLoop(cfg, term);
+  startWebServer(cfg, main, cli, port);
+
+  await runLoop(cfg, loopTerm);
 })().catch((e: unknown) => {
   console.error("[autoresearch] fatal:", e);
   process.exit(1);
