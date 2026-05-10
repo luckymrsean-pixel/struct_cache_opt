@@ -8,6 +8,7 @@
     "test:term":    "tsx scripts/test-term.ts",
     "test:log":     "tsx scripts/test-log.ts",
     "test:errors":  "tsx scripts/test-errors.ts",
+    "test:pty":     "tsx scripts/test-interactive-pty.ts",
     "test":         "bash scripts/run-all-tests.sh"
   },
   "dependencies": {
