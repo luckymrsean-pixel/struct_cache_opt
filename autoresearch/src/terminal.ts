@@ -37,7 +37,7 @@ export class Terminal extends EventEmitter {
       name: "xterm-256color",
       cols: 220,
       rows: 50,
-      env:  { ...process.env, TERM: "dumb" },
+      env:  { ...process.env, TERM: "xterm-256color" },
     });
 
     this.alive = true;
