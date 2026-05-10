@@ -156,7 +156,7 @@ label.field-lbl { display:block; font-size:10px; color:var(--dim); margin-bottom
 }
 .add-stage-btn:hover { border-color:var(--blue); color:var(--blue); }
 
-/* ── Center — dual terminals ─────────────── */
+/* ── Center — dual terminals (loop mirror on top, cli below) ─────────────── */
 #center { display:flex; flex-direction:column; background:#0a0e14; position:relative; overflow:hidden; }
 .term-wrap { position:relative; flex:1; min-height:0; overflow:hidden; }
 .term-wrap#term-cli-wrap { flex:0 0 38%; border-top:1px solid var(--border); }
@@ -272,15 +272,15 @@ label.field-lbl { display:block; font-size:10px; color:var(--dim); margin-bottom
   <div>
     <div class="pane-title">Skill &amp; Scope</div>
     <label class="field-lbl">Skill 绝对路径</label>
-    <input class="field-input" id="skill-path" type="text" placeholder="/home/sean/.claude/skills/autoresearch" value="/home/sean/.claude/skills/autoresearch"/>
+    <input class="field-input" id="skill-path" type="text" placeholder="/mnt/f/code2/target_skill/struct_cache_opt" value="/mnt/f/code2/target_skill/struct_cache_opt"/>
     <label class="field-lbl" style="margin-top:6px">Skill 名称</label>
     <input class="field-input" id="skill-name" type="text" placeholder="struct_cache_opt" value="struct_cache_opt"/>
     <label class="field-lbl" style="margin-top:6px">Scope（自然语言）</label>
-    <textarea class="field-input" id="scope-nl" rows="2" placeholder="optimize struct layout and cache alignment in the ANGLE rendering pipeline">optimize struct layout and cache alignment in the ANGLE rendering pipeline</textarea>
+    <textarea class="field-input" id="scope-nl" rows="2" placeholder="reorder vk::ImageHelper fields to minimise cache-misses on gfxbench gl_5_normal">reorder vk::ImageHelper fields to minimise cache-misses on gfxbench gl_5_normal</textarea>
     <div class="prompt-preview">
       <span class="lbl">Stage 1 CLI 调用</span>
-      <span id="prompt-preview">claude --skill /home/sean/.claude/skills/autoresearch/SKILL.md \
-  -p "use struct_cache_opt optimize struct layout and cache alignment in the ANGLE rendering pipeline"</span>
+      <span id="prompt-preview">claude --skill /mnt/f/code2/target_skill/struct_cache_opt/SKILL.md \
+  -p "use struct_cache_opt reorder vk::ImageHelper fields to minimise cache-misses on gfxbench gl_5_normal"</span>
     </div>
   </div>
 
@@ -296,13 +296,14 @@ label.field-lbl { display:block; font-size:10px; color:var(--dim); margin-bottom
 
 </aside>
 
-<!-- Center: dual terminals -->
+<!-- Center: dual terminals
+     - top "main" pane = read-only mirror of loopTerm (Stage 1 LLM + automation)
+     - bottom "cli" pane = interactive shell for the operator (claude login, …) -->
 <div id="center">
   <div class="term-wrap" id="term-main-wrap">
     <div class="term-label">
       <div class="tl-dot active" id="main-dot"></div>
-      <span style="flex:1">Main Terminal — 系统 / 用户输入</span>
-      <button class="restart-btn" onclick="requestRestart('main')" title="Restart main bash">↻</button>
+      <span style="flex:1">Loop — Stage 1 LLM 输出 / 自动化 PTY (read-only)</span>
     </div>
     <div class="term-inner" id="term-main"></div>
   </div>
@@ -310,7 +311,7 @@ label.field-lbl { display:block; font-size:10px; color:var(--dim); margin-bottom
   <div class="term-wrap" id="term-cli-wrap">
     <div class="term-label">
       <div class="tl-dot active" id="cli-dot"></div>
-      <span style="flex:1">Copilot CLI — Stage 1 专用</span>
+      <span style="flex:1">CLI — 手动登录 / 调试 (claude login, copilot, …)</span>
       <button class="restart-btn" onclick="requestRestart('cli')" title="Restart cli bash">↻</button>
     </div>
     <div class="term-inner" id="term-cli"></div>
@@ -369,9 +370,9 @@ function makeTerm(elId) {
   return { term:t, fit };
 }
 
-const main = makeTerm('term-main');
-const cli  = makeTerm('term-cli');
-main.term.focus();
+const main = makeTerm('term-main');   // read-only mirror of loopTerm
+const cli  = makeTerm('term-cli');    // interactive shell
+cli.term.focus();
 
 // Wire cli terminal: forward keystrokes and resize to server (term:"cli").
 cli.term.onData(d => {
@@ -426,26 +427,26 @@ document.getElementById('scope-nl').addEventListener('input', updatePrompt);
 // ─── Stage management ─────────────────────────────────────────────────────────
 
 let stages = [
-  { id:0, name:'Init & Copilot Login',
-    script:'gh auth login --with-token < ~/.gh-token\n# Confirm user is authenticated',
+  { id:0, name:'Init & Claude Login',
+    script:'# Manual: in main terminal, run `claude login` once, then click ✓ Confirm.\n# setupCmds (from yml) run AFTER this confirm:\n#   - export CCACHE_DIR=$HOME/.ccache\n#   - cd /home/fxy/angle && git config user.email autoresearch@local\n#   - [ -d /mnt/f/code2/target_skill/.git ] || git init /mnt/f/code2/target_skill',
     manual:true, status:'confirm', log:'stage-0.log', expanded:true },
-  { id:1, name:'Generate Diff (Skills CLI)',
-    script:'# Claude Code skill invocation\n# Path and prompt auto-derived from Skill config above\n# claude --skill ${SKILL_PATH}/SKILL.md \\\n#   -p "use ${SKILL_NAME} ${SCOPE}" < .ar-context.txt > .ar.patch',
+  { id:1, name:'Generate Diff (struct_cache_opt skill)',
+    script:'# Loop runs:  ${skillDir}/run.sh < .ar-context.txt > .ar.patch\n# Context = pahole(vk::ImageHelper) + git log -10 (with perf body) + tail(results.tsv)\n# Skill calls $IDEATE_CLI (default: claude -p) with prompt.tmpl + sources in scope.',
     manual:false, status:'idle', log:'stage-1.log', expanded:false },
   { id:2, name:'Apply Diff',
-    script:'git apply --check .ar.patch && git apply .ar.patch',
+    script:'git apply --check .ar.patch && git apply .ar.patch\n# scope guard: changes outside src/libANGLE/renderer/vulkan/vk_helpers.{h,cpp} → revert',
     manual:false, status:'idle', log:'stage-2.log', expanded:false },
-  { id:3, name:'Build & Health Test',
-    script:'autoninja -C out/Release angle_perftests 2>&1 | tee stage-3.log\necho "Building..."',
+  { id:3, name:'Build (libGLESv2 + libEGL)',
+    script:'cd /home/fxy/angle && \\\n  PATH=$AR_DEPOT_TOOLS:$PATH DEPOT_TOOLS_UPDATE=0 \\\n  autoninja -C out/Release libGLESv2 libEGL 2>&1 | tee build.log',
     manual:false, status:'idle', log:'stage-3.log', expanded:false },
-  { id:4, name:'Benchmark & Health Test',
-    script:"perf stat -e cpu-cycles ./out/Release/angle_perftests \\\n  --gtest_filter='*DrawQuad*' --iterations=100 2>&1 | tee stage-4.log",
+  { id:4, name:'Benchmark (gfxbench + perf)',
+    script:'cd $AR_GFX_DIR && \\\n  perf stat -e cycles,cache-misses,dTLB-load-misses \\\n    ./bin/testfw_app -b . --gfx egl -t gl_5_normal \\\n    >/dev/null 2>$AR_PERF_LOG\n# fps from JSON, perf counters from $AR_PERF_LOG\n# echo $cache_misses  ← parseMetric() reads the LAST stdout token',
     manual:false, status:'idle', log:'stage-4.log', expanded:false },
-  { id:5, name:'Extract Perf & Commit',
-    script:'# auto: extract metric from stage-4.log\n# git add -A\n# git commit -m "experiment: iter N  cycles=$(metric)"\n# All stage logs archived with commit',
+  { id:5, name:'Amend Commit (perf body) & Decide',
+    script:'# In verifyCmd: git commit --amend appends to the iter commit:\n#   subject: experiment: iter N  fps=…  cycles=…  cache-misses=…  dTLB-load-misses=…\n#   body:    full perf stat output (visible in dashboard history)\n# Loop decides: cache-misses < best ? keep : git revert HEAD',
     manual:false, status:'idle', log:'stage-5.log', expanded:false },
   { id:6, name:'Auto Search Schedule',
-    script:'# Recursive skill call: optimize the OPTIMIZATION APPROACH itself\n# Passes git log + TSV history as context → skill proposes next diff\n# claude --skill ${SKILL_PATH}/SKILL.md \\\n#   -p "/autoresearch\\nIterations: 1\\n$(git log -20 --oneline)\\n$(tail -20 results.tsv)"\n#\n# This IS the loop driver: Stage 6 → Stage 1 → Stage 2 → ... → Stage 6',
+    script:'# Loop driver: contextCmds re-run, skill called again with updated\n# pahole + git log (now containing previous iter\'s perf body) + TSV tail.\n# Stop when: iterations exhausted, plateauPatience hit, or operator clicks ⏹.',
     manual:false, status:'idle', log:'stage-6.log', expanded:false },
 ];
 
@@ -482,7 +483,7 @@ function renderStages() {
       <div class="stage-body ${s.expanded ? 'open' : ''}" id="sbody-${i}">
         <textarea class="stage-script" rows="3" oninput="stages[${i}].script=this.value">${esc(s.script)}</textarea>
         <div class="stage-actions">
-          ${s.manual ? `<button class="s-confirm-btn" onclick="confirmStage(${i})">✓ Confirm &amp; Continue</button>` : ''}
+          ${s.manual && s.status === 'confirm' ? `<button class="s-confirm-btn" onclick="confirmStage(${i})">✓ Confirm &amp; Continue</button>` : ''}
           <span class="s-del-btn" onclick="removeStage(${i})">✕ Remove</span>
         </div>
       </div>
@@ -646,11 +647,9 @@ function applyCommit(hash) {
 
 let ws = null;
 
-main.term.onData(d => {
-  if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type:'input', term:'main', data:d }));
-  else { if(d==='\r') main.term.write('\r\n'); else if(d==='\x7f') main.term.write('\b \b'); else main.term.write(d); }
-});
-main.term.onResize(({cols,rows}) => { if(ws?.readyState===WebSocket.OPEN) ws.send(JSON.stringify({type:'resize', term:'main', cols, rows})); });
+// `main` pane is a read-only mirror of loopTerm — no input or resize wiring.
+// loopTerm runs at fixed cols=220 inside the loop process, so we don't push
+// resize either; xterm's local fit is purely cosmetic.
 
 function showDeadBanner(term, info) {
   const xterm = (term === 'cli' ? cli : main).term;
@@ -696,14 +695,19 @@ function connectWS() {
       wsReconnectAttempt = 0;
       document.getElementById('ws-dot').className = 'ws-dot connected';
       document.getElementById('ws-label').textContent = '已连接';
+      stopPolling();
     };
     ws.onclose = () => {
       ws = null;
       document.getElementById('ws-dot').className = 'ws-dot demo';
-      document.getElementById('ws-label').textContent = '断开 — 重连中…';
+      document.getElementById('ws-label').textContent = '断开 — 轮询 /api/state 中…';
       const delay = WS_DELAYS[Math.min(wsReconnectAttempt, WS_DELAYS.length - 1)];
       wsReconnectAttempt++;
-      // After 3 attempts, also fall back to demo so the page doesn't look dead.
+      // First close → start HTTP polling fallback (works through proxies that
+      // block WebSocket Upgrade, e.g. VS Code Simple Browser via Clash).
+      startPolling();
+      // After 3 unsuccessful retries also fall back to demo so the page doesn't
+      // look dead even if /api/state itself is unreachable.
       if (wsReconnectAttempt === 3 && !demoRunning) startDemo();
       setTimeout(connectWS, delay);
     };
@@ -736,6 +740,23 @@ function updateStatus(m) {
   document.getElementById('tb-iter').textContent  = m.iter ? `${m.iter} / ${m.total}` : '—';
   document.getElementById('tb-phase').textContent = m.phase || '—';
   if (m.best != null) document.getElementById('tb-best').textContent = Number(m.best).toLocaleString();
+  // Top-level pill
+  const pill = document.getElementById('tb-status');
+  if (m.phase && m.phase !== 'idle' && !/done|stopped|plateau/.test(m.phase)) {
+    pill.innerHTML = '<span class="pill running">running</span>';
+  } else {
+    pill.innerHTML = '<span class="pill idle">idle</span>';
+  }
+  // Per-stage states from loop.ts → reconcile all 7 stages.
+  if (m.stages) {
+    let dirty = false;
+    for (const s of stages) {
+      const want = m.stages[s.id];
+      if (want && s.status !== want) { s.status = want; dirty = true; }
+    }
+    if (dirty) renderStages();
+  }
+  // Backwards-compat: legacy single-stage update path.
   if (m.stage != null) setStageStatus(m.stage, m.stageStatus || 'running');
 }
 
@@ -796,7 +817,53 @@ function startDemo() {
   next();
 }
 
-setTimeout(() => { if (!ws) startDemo(); }, 1200);
+// ─── HTTP polling fallback ────────────────────────────────────────────────────
+// When the WebSocket is unreachable (proxy blocks Upgrade, VS Code Simple
+// Browser, etc.), poll /api/state every 2s and dispatch the same handlers
+// the WS path uses. Track per-terminal byte length so we only write the
+// incremental tail to xterm — otherwise we'd re-render the entire buffer
+// every tick and the terminals would scroll uncontrollably.
+let pollTimer = null;
+const ptySeen = { main: 0, cli: 0 };
+async function pollOnce() {
+  try {
+    const r = await fetch('/api/state', { cache: 'no-store' });
+    if (!r.ok) return;
+    const s = await r.json();
+    if (s.status)  updateStatus(s.status);
+    if (s.history) renderHistory(s.history);
+    for (const term of ['main','cli']) {
+      const full = s.pty?.[term] || '';
+      const xterm = (term === 'cli' ? cli : main).term;
+      if (full.length > ptySeen[term]) {
+        xterm.write(full.slice(ptySeen[term]));
+        ptySeen[term] = full.length;
+      } else if (full.length < ptySeen[term]) {
+        // ring buffer rotated — replay the whole window
+        xterm.reset();
+        xterm.write(full);
+        ptySeen[term] = full.length;
+      }
+    }
+    document.getElementById('ws-dot').className = 'ws-dot connected';
+    document.getElementById('ws-label').textContent = 'HTTP 轮询';
+  } catch (_) { /* keep retrying */ }
+}
+function startPolling() {
+  if (pollTimer) return;
+  pollOnce();
+  pollTimer = setInterval(pollOnce, 2000);
+}
+function stopPolling() {
+  if (!pollTimer) return;
+  clearInterval(pollTimer);
+  pollTimer = null;
+  ptySeen.main = 0; ptySeen.cli = 0;
+}
+
+// Don't auto-fire demo at 1.2s — startPolling() already kicks in on first
+// WS close, so the page never goes dead even when WS is blocked. Demo only
+// fires after 3 reconnect failures (see ws.onclose) AND polling has nothing.
 connectWS();
 </script>
 </body>

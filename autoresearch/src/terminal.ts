@@ -37,7 +37,7 @@ export class Terminal extends EventEmitter {
       name: "xterm-256color",
       cols: 220,
       rows: 50,
-      env:  { ...process.env, TERM: "xterm-256color" },
+      env:  { ...process.env, TERM: "dumb" },
     });
 
     this.alive = true;
@@ -57,8 +57,14 @@ export class Terminal extends EventEmitter {
     // Sentinel: wait for shell ready BEFORE sending setup commands
     await this._sentinel();
 
-    // Suppress echo + blank prompt so output stays clean
-    this.proc.write("stty -echo; export PS1=''; export PS2=''\n");
+    // Suppress echo + blank prompt + disable bracketed-paste so output stays
+    // clean. Without disabling bracketed-paste, bash emits \e[?2004h right
+    // before each prompt, which can land glued to a __OUT__ line and break
+    // the line-prefix dispatch in _parse.
+    this.proc.write(
+      "stty -echo; export PS1=''; export PS2=''; " +
+      "bind 'set enable-bracketed-paste off' 2>/dev/null\n",
+    );
     await this._sleep(150);
     this.buf = "";                        // discard all startup noise
   }
@@ -76,10 +82,13 @@ export class Terminal extends EventEmitter {
 
     // ── INVARIANT: wrapper script captures exit code then waits for sed ──────
     //   $? captured before `wait` to survive background sed processes.
+    //   Newlines inside the brace group are required so heredoc end-tags
+    //   inside ${cmd} can sit alone on their own line; otherwise bash never
+    //   recognises the heredoc terminator and reads forever.
     const wrapped =
-      `{ ${cmd}; } ` +
+      `{\n${cmd}\n} ` +
       `1> >(sed -u 's/^/__OUT__/') ` +
-      `2> >(sed -u 's/^/__ERR__/' >&2); ` +
+      `2> >(sed -u 's/^/__ERR__/' >&2)\n` +
       `_AR_EC=$?; wait; ` +
       `printf '__EXIT__%d__END__${marker}\\n' "$_AR_EC"\n`;
 
@@ -176,7 +185,12 @@ export class Terminal extends EventEmitter {
 
     const exitRe = new RegExp(`__EXIT__(\\d+)__END__${marker}`);
 
-    for (const line of raw.split(/\r?\n/)) {
+    // Strip ANSI/CSI escape sequences before prefix-checking — bash
+    // sometimes glues escapes (e.g. bracketed-paste \e[?2004h) directly
+    // before our __OUT__/__ERR__ markers without a newline.
+    const ansiRe = /\x1b\[[0-9;?]*[a-zA-Z]/g;
+    for (const rawLine of raw.split(/\r?\n/)) {
+      const line = rawLine.replace(ansiRe, "");
       if (line.startsWith("__OUT__")) {
         const l = line.slice(7);
         stdoutLines.push(l);

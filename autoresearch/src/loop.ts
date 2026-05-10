@@ -1,6 +1,7 @@
 import { Terminal, CmdResult } from "./terminal";
 import { ensure, append, tail, bestSoFar, Row } from "./logger";
 import { Config } from "./config";
+import { loopState, setStage, resetIterStages } from "./web";
 
 // ─── Runtime + dashboard controller ───────────────────────────────────────────
 //
@@ -209,14 +210,18 @@ async function runSession(cfg: Config, term: Terminal): Promise<void> {
   // setupCmds — gh auth (for non-interactive token flows), git config, etc.
   // Manual auth (e.g. `claude login`) is the operator's job in the dashboard
   // terminal BEFORE clicking Start; setupCmds run AFTER Start.
+  setStage(0, "running");
   for (const cmd of cfg.setupCmds ?? []) {
     console.error(`[autoresearch] setup: ${cmd}`);
     await runOrDie(term, cmd);
   }
+  setStage(0, "done");
 
   // Baseline (skipped if TSV already has one from a prior session).
   let best = bestSoFar(cfg.tsvPath, cfg.direction);
   if (best === null) {
+    loopState.iter = 0;
+    loopState.phase = "baseline (verify)";
     const v = await runOrDie(term, cfg.verifyCmd);
     const m = parseMetric(v);
     if (m === null) throw new Error("baseline: verifyCmd returned no numeric metric");
@@ -235,8 +240,12 @@ async function runSession(cfg: Config, term: Terminal): Promise<void> {
   for (let n = 1; n <= iters; n++) {
     if (runtime.stopRequested) {
       console.error("[autoresearch] stop requested — exiting session");
+      loopState.phase = "stopped";
       return;
     }
+    loopState.iter = n;
+    loopState.phase = `iter ${n}: starting`;
+    resetIterStages();
     console.error(`\n[autoresearch] ── iter ${n} ──`);
 
     if (!term.alive) {
@@ -268,26 +277,56 @@ async function runSession(cfg: Config, term: Terminal): Promise<void> {
     const ctxBody =
       (extraCtx ? `${extraCtx}\n---\n` : ``) +
       `${recentLog.stdout}\n---\n${tsvTail}`;
+    loopState.phase = `iter ${n}: stage 1 (ideate)`;
+    setStage(1, "running");
+    console.error(`[iter ${n}] stage 1: ideate (${ideateCmd})`);
     const ideate = await term.run(
       `${ideateCmd} <<'${heredocTag}'\n${ctxBody}\n${heredocTag}`,
-      10 * 60_000,
+      20 * 60_000,
+    );
+    console.error(
+      `[iter ${n}] stage 1: ideate exit=${ideate.exitCode} ` +
+      `stdout=${ideate.stdout.length}B stderr=${ideate.stderr.length}B ` +
+      `(${ideate.durationMs}ms)`,
     );
 
     if (ideate.exitCode !== 0 || !ideate.stdout.trim()) {
+      setStage(1, "error");
+      console.error(
+        `[iter ${n}] stage 1 FAIL — first 5 lines stdout:\n` +
+        ideate.stdout.split("\n").slice(0, 5).map((l) => `  | ${l}`).join("\n") +
+        `\n[iter ${n}] stage 1 FAIL — first 5 lines stderr:\n` +
+        ideate.stderr.split("\n").slice(0, 5).map((l) => `  | ${l}`).join("\n"),
+      );
       append(cfg.tsvPath, makeRow(n, "discard", null, null, ideate, "ideate-fail"));
       continue;
     }
+    setStage(1, "done");
 
     // Apply the patch ─────────────────────────────────────────────────────
+    loopState.phase = `iter ${n}: stage 2 (apply)`;
+    setStage(2, "running");
+    console.error(`[iter ${n}] stage 2: git apply (${ideate.stdout.length}B patch)`);
     const patchTag = `AR_EOF_${rand()}`;
     const apply = await term.run(
       `cat > .ar.patch <<'${patchTag}'\n${ideate.stdout}\n${patchTag}\n` +
       `git apply --check .ar.patch && git apply .ar.patch`,
     );
     if (apply.exitCode !== 0) {
+      setStage(2, "error");
+      console.error(
+        `[iter ${n}] stage 2 FAIL — git stderr:\n` +
+        apply.stderr.split("\n").slice(0, 5).map((l) => `  | ${l}`).join("\n") +
+        `\n[iter ${n}] stage 2 FAIL — patch first 5 lines:\n` +
+        ideate.stdout.split("\n").slice(0, 5).map((l) => `  | ${l}`).join("\n") +
+        `\n[iter ${n}] stage 2 FAIL — patch last 5 lines:\n` +
+        ideate.stdout.split("\n").slice(-5).map((l) => `  | ${l}`).join("\n"),
+      );
       append(cfg.tsvPath, makeRow(n, "discard", null, null, apply, "apply-fail"));
       continue;
     }
+    setStage(2, "done");
+    console.error(`[iter ${n}] stage 2: apply OK`);
 
     // Scope guard ─────────────────────────────────────────────────────────
     const diff    = await term.run("git diff --name-only");
@@ -304,23 +343,45 @@ async function runSession(cfg: Config, term: Terminal): Promise<void> {
     }
 
     // 4. Commit BEFORE verify ─────────────────────────────────────────────
-    await runOrDie(term, `git add -A && git commit -m "experiment: iter ${n}"`);
+    // Add ONLY the scope-validated changed files. `git add -A` would also
+    // try to add unrelated workdir state (e.g. broken submodule paths in
+    // /home/fxy/angle/_bad_scm/...), which kills the session.
+    const addArgs = changed
+      .map((f) => `'${f.replace(/'/g, `'\\''`)}'`)
+      .join(" ");
+    await runOrDie(term, `git add -- ${addArgs} && git commit -m "experiment: iter ${n}"`);
 
     // 5a. Guard ───────────────────────────────────────────────────────────
+    loopState.phase = `iter ${n}: stage 3 (build)`;
+    setStage(3, "running");
+    console.error(`[iter ${n}] stage 3: guardCmd (build)`);
     const guard = await term.run(cfg.guardCmd, 20 * 60_000);
+    console.error(`[iter ${n}] stage 3: build exit=${guard.exitCode} (${guard.durationMs}ms)`);
     if (guard.exitCode !== 0) {
+      setStage(3, "error");
       const diagDesc = await runDiag(term, cfg.diagCmd);
+      console.error(`[iter ${n}] stage 3 FAIL — diag: ${diagDesc || "(none)"}`);
       await term.run("git revert --no-edit HEAD");
       append(cfg.tsvPath, makeRow(n, "discard", null, null, guard, `build-fail${diagDesc}`));
       continue;
     }
+    setStage(3, "done");
 
     // 5b. Verify ──────────────────────────────────────────────────────────
+    loopState.phase = `iter ${n}: stage 4 (verify)`;
+    setStage(4, "running");
+    console.error(`[iter ${n}] stage 4: verifyCmd (metric)`);
     const v      = await term.run(cfg.verifyCmd, 30 * 60_000);
     const metric = parseMetric(v);
+    console.error(
+      `[iter ${n}] stage 4: verify exit=${v.exitCode} metric=${metric} ` +
+      `stdout="${v.stdout.slice(-80)}" (${v.durationMs}ms)`,
+    );
 
     if (metric === null || v.exitCode !== 0) {
+      setStage(4, "error");
       const diagDesc = await runDiag(term, cfg.diagCmd);
+      console.error(`[iter ${n}] stage 4 FAIL — diag: ${diagDesc || "(none)"}`);
       await term.run("git revert --no-edit HEAD");
       append(cfg.tsvPath, makeRow(n, "crash", null, null, v, `verify-bad${diagDesc}`));
       if (++metricErrors >= 2) {
@@ -329,9 +390,11 @@ async function runSession(cfg: Config, term: Terminal): Promise<void> {
       }
       continue;
     }
+    setStage(4, "done");
     metricErrors = 0;
 
     // 6. Decide ───────────────────────────────────────────────────────────
+    setStage(5, "running");
     const better = cfg.direction === "lower" ? metric < best! : metric > best!;
 
     // Dry-run: always revert and leave best/sinceBest untouched. The TSV row
@@ -350,18 +413,23 @@ async function runSession(cfg: Config, term: Terminal): Promise<void> {
       sinceBest   = 0;
       console.error(`[autoresearch] ✓ keep  metric=${metric}  delta=${delta}`);
       append(cfg.tsvPath, makeRow(n, "keep", metric, delta, v, "keep"));
+      setStage(5, "done");
     } else {
       await term.run("git revert --no-edit HEAD");
       sinceBest++;
       console.error(`[autoresearch] ✗ discard  metric=${metric}  best=${best}`);
       append(cfg.tsvPath, makeRow(n, "discard", metric, metric - best!, v, "regress"));
+      setStage(5, "done");
     }
+    setStage(6, "done");
 
     if (sinceBest >= cfg.plateauPatience) {
       console.error(`[autoresearch] plateau ${sinceBest}/${cfg.plateauPatience} — exiting session`);
+      loopState.phase = "plateau";
       return;
     }
   }
 
   console.error("[autoresearch] iterations exhausted — session done");
+  loopState.phase = "done";
 }

@@ -1,10 +1,19 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # autoresearch — vk::ImageHelper struct layout optimization
 # ─────────────────────────────────────────────────────────────────────────────
-# Loop: pahole-driven LLM rewrite of vk::ImageHelper field order, validated by
-# rebuilding ANGLE Release and running gfxbench gl_5_normal. Higher fps wins.
+# Closed loop:  skill (target_skill/struct_cache_opt) → unified diff
+#            →  apply to /home/fxy/angle (workdir)
+#            →  build libGLESv2/libEGL
+#            →  run gfxbench gl_5_normal under perf stat
+#            →  amend the iter commit with perf summary (cycles / cache-misses /
+#               dTLB-load-misses / fps) so the dashboard history shows it
+#            →  use cache-misses (lower=better) as the keep/discard metric
+#
+# UI is for humans; the loop is driven by Claude (see loop_control skill at
+# .claude/skills/loop_control/). Each stage's command can be patched mid-run
+# by editing this file or by calling the dashboard WebSocket — see how-to.md.
 
-goal:    最大化 gl_5_normal fps，途径=优化 vk::ImageHelper 缓存对齐与字段排布
+goal:    最小化 vk::ImageHelper 触发的 cache-misses（同时记录 cycles/dTLB/fps），承载场景=gfxbench gl_5_normal
 remote:  ""                                # local
 workdir: /home/fxy/angle
 
@@ -13,54 +22,90 @@ scope:
   - src/libANGLE/renderer/vulkan/vk_helpers.cpp
 
 # ── Skill ────────────────────────────────────────────────────────────────────
-# The skill at $skillDir is the LLM-driven diff generator. It reads context
-# (pahole report + git log + TSV tail) on stdin and the source files in
-# $AR_SCOPE, then calls $IDEATE_CLI (default: claude -p) to emit a unified diff.
-skillDir: /home/fxy/.claude/skills/struct_cache_opt
-# ideatePrompt resolves to ${skillDir}/run.sh automatically when skillDir is set.
+# struct_cache_opt skill = the LLM-driven diff generator.
+# Lives under /mnt/f/code2/target_skill/, which is itself a git repo so
+# edits to the skill (prompt.tmpl, helpers, etc.) are versioned alongside
+# experiment results.
+skillDir: /mnt/f/code2/target_skill/struct_cache_opt
 
-# ── Per-iteration context (the loop runs these, prepends stdout to LLM heredoc)
-# pahole-image-helper.sh builds a one-off debug .o for vk_helpers.cc the first
-# time (~30-90s, then cached by ninja) and emits the layout + reorganize report.
-contextCmds:
-  - /home/fxy/.claude/skills/struct_cache_opt/lib/pahole-image-helper.sh
+# ── Per-iteration context fed to the skill on stdin ──────────────────────────
+# Empty: loop.ts already prepends `git log -20 --oneline` + tail(results.tsv).
+# Including full commit bodies pulled MBs of ANGLE auto-roll footers into the
+# heredoc, which deadlocked the PTY write/read on the next iter's ideate call.
+# The skill reads $AR_SCOPE source files internally — that's the real context.
+contextCmds: []
 
 # ── Env exported into the PTY before each session ────────────────────────────
-# IDEATE_CLI selects which CLI the skill calls. Override here, in autoresearch.yml,
-# or set in the dashboard terminal before clicking Start.
 env:
-  IDEATE_CLI: "claude -p"
+  IDEATE_CLI:     "claude -p"
   AR_DEPOT_TOOLS: /home/fxy/depot_tools
+  AR_GFX_DIR:     /home/fxy/work/gfxbench/tfw-pkg
+  # AR_PERF_LOG kept for future perf re-enable; verifyCmd currently doesn't write it
+  AR_PERF_LOG:    /tmp/ar-perf.log
+  # Subset of AR_SCOPE that gets inlined into the LLM prompt. vk_helpers.cpp
+  # is ~540KB and most of it is method bodies that don't influence layout
+  # decisions. Sending only the header drops the prompt from ~600KB to ~75KB
+  # (≈10× faster ideate).
+  AR_PROMPT_SCOPE: src/libANGLE/renderer/vulkan/vk_helpers.h
 
-# ── setupCmds run AFTER the operator clicks Start (post manual auth) ─────────
+# ── setupCmds: run once after the operator clicks Start ──────────────────────
+# - target_skill/.git is auto-created on first run so the skill is versioned
+# - ccache for faster rebuilds across iterations
 setupCmds:
   - export CCACHE_DIR=$HOME/.ccache
   - cd /home/fxy/angle && git config user.email autoresearch@local || true
+  - "[ -d /mnt/f/code2/target_skill/.git ] || (cd /mnt/f/code2/target_skill && git init -q && git add -A && git -c user.email=autoresearch@local -c user.name=autoresearch commit -q -m 'initial: target skill snapshot')"
 
 # ── Build ANGLE Release (libGLESv2/libEGL — what gfxbench links against) ─────
-guardCmd: |
+guardCmd: |-
   cd /home/fxy/angle && \
     PATH=$AR_DEPOT_TOOLS:$PATH DEPOT_TOOLS_UPDATE=0 \
     autoninja -C out/Release libGLESv2 libEGL 2>&1 | tee build.log
 
-# ── Run gfxbench gl_5_normal, extract fps from the result JSON ───────────────
-verifyCmd: |
-  cd /home/fxy/work/gfxbench/tfw-pkg && \
-    ./bin/testfw_app -b . --gfx egl -t gl_5_normal >/dev/null 2>&1 && \
-    jq -r '.results[0].results.fps' "$(ls -td results/*/ | head -1)gl_5_normal.json"
+# ── Verify: .text size of vk_helpers.o (proxy metric, pipeline validator) ────
+# Why this and not gfxbench/perf/pahole on this host:
+#  - WSL2 stock `perf` is broken (kernel-tools mismatch); `jq` missing
+#  - gfxbench testfw_app fails X11 window (0x0 size) on this WSLg setup
+#  - pahole 1.31 + ANGLE BUILD.gn patched (-fstandalone-debug,
+#    -gno-simple-template-names) build full DWARF, but vk::ImageHelper
+#    class-type DIE is still not surfaced by pahole's parser on this TU
+#
+# So this verifyCmd uses `size` on the freshly-built vk_helpers.o. Field
+# reordering won't change .text directly, but inlining of getters/setters and
+# member access patterns will — coarse, but enough to validate that the loop
+# can: ideate → apply → build → measure → commit/decide → next iter.
+#
+# To upgrade to the real metric:
+#  - perf:    install linux-tools-standard-WSL2; revert this block to the
+#             perf stat version (see git log of vk-image-helper.yml)
+#  - pahole:  fix the helper script's hand-off so it actually parses
+#             rx::vk::ImageHelper from the .o (see how-to.md)
+verifyCmd: |-
+  set -o pipefail
+  obj=/home/fxy/angle/out/Debug-pahole/obj/src/libANGLE/renderer/vulkan/angle_vulkan_backend/vk_helpers.o
+  cd /home/fxy/angle && \
+    PATH=$AR_DEPOT_TOOLS:$PATH DEPOT_TOOLS_UPDATE=0 \
+    autoninja -C out/Debug-pahole "${obj#/home/fxy/angle/}" >/dev/null 2>&1
+  text_bytes=$(size "$obj" 2>/dev/null | awk 'NR==2 {print $1}')
+  cd /home/fxy/angle && \
+    if git log -1 --format=%s | grep -q '^experiment: iter '; then \
+      git commit --amend \
+        -m "$(git log -1 --format=%s)  vk_helpers.o.text=${text_bytes}" \
+        -m "metric: .text bytes of vk_helpers.o (Debug-pahole). proxy until pahole/perf/gfxbench wired up." \
+        >/dev/null 2>&1 || true; \
+    fi
+  echo "$text_bytes"
 
 # ── Diagnostics on build/verify failure ──────────────────────────────────────
-diagCmd: |
-  grep -E "^.*error:" /home/fxy/angle/build.log 2>/dev/null | head -5 || true
+diagCmd: |-
+  grep -E "^.*error:" /home/fxy/angle/build.log 2>/dev/null | head -5
 
 # ── Comparison ───────────────────────────────────────────────────────────────
-direction:   higher
-metricLabel: fps
-metricUnit:  fps
+direction:   lower
+metricLabel: text-bytes
+metricUnit:  bytes
 
 # ── Dry-run patch (used when the dashboard's Dry Run toggle is ON) ───────────
-# Trivial in-scope edit: ensures Stage 2 (apply) → Stage 3 (build) → Stage 4
-# (verify) all exercise. Generated at session-prep time by tools/gen-dryrun-patch.sh.
 dryRunPatch: /tmp/struct_cache_opt.fake.patch
 
 # ── Scheduling ───────────────────────────────────────────────────────────────
