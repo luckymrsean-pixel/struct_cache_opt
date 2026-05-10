@@ -2,18 +2,32 @@
  * src/web.ts — WebSocket 服务端
  *
  * 启动方式（在 runLoop 启动前调用）：
- *   startWebServer(cfg, term, 8080)
+ *   startWebServer(cfg, main, cli, 8080)
+ *
+ * 两个 InteractivePty 给用户交互（main / cli），loop 跑在隐藏的 Terminal
+ * 实例（不广播）。所有用户帧都带 `term: "main"|"cli"`。
  *
  * 协议（JSON 帧）：
  *   server → client:
- *     { type:"pty",    data:string }          原始 PTY 字节
- *     { type:"status", iter, total, phase, best, alive }
- *     { type:"git",    branch, lastCommit, changed:string[] }
- *     { type:"log",    files: LogFile[] }
+ *     { type:"pty",                  term, data:string }      原始 PTY 字节
+ *     { type:"dead",                 term, code, signal }      PTY 异常退出
+ *     { type:"restarted",            term }                   重启完成
+ *     { type:"restart-failed",       term, reason:string }    重启失败
+ *     { type:"restart-check-result", term, hasChildren, childCmds:string[] }
+ *     { type:"status",  iter, total, phase, best, alive }     alive = main && cli
+ *     { type:"git",     branch, lastCommit, changed:string[] }
+ *     { type:"log",     files: LogFile[] }
+ *     { type:"history", commits, head }
+ *     { type:"toast",   msg:string }
  *
  *   client → server:
- *     { type:"input",  data:string }          键盘输入 → PTY
- *     { type:"resize", cols, rows }
+ *     { type:"input",         term, data:string }
+ *     { type:"resize",        term, cols, rows }
+ *     { type:"restart-check", term }                          查询有无子进程
+ *     { type:"restart",       term }                          执行重启
+ *     { type:"config",  dryRun:boolean }
+ *     { type:"loop",    action:"start"|"stop", iterations? }
+ *     { type:"apply",   hash:string }
  */
 
 import * as http from "http";
