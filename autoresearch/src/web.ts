@@ -21,7 +21,7 @@ import { existsSync, readFileSync, statSync } from "fs";
 import { execSync } from "child_process";
 import { join } from "path";
 import { WebSocket, WebSocketServer } from "ws";
-import { Terminal } from "./terminal";
+import { InteractivePty } from "./interactive-pty";
 import { bestSoFar } from "./logger";
 import { Config } from "./config";
 import { runtime } from "./loop";
@@ -188,7 +188,8 @@ function getLogFiles(cfg: Config): LogMsg {
 
 export function startWebServer(
   cfg:   Config,
-  term:  Terminal,
+  main:  InteractivePty,
+  cli:   InteractivePty,
   port = 8080,
 ): void {
   // Serve dashboard HTML — try a few candidate locations because the file may
@@ -216,10 +217,21 @@ export function startWebServer(
 
   const wss = new WebSocketServer({ server });
 
-  // Forward raw PTY bytes to all clients
-  term.on("data", (d: string) => {
-    broadcast(wss, { type: "pty", data: d });
-  });
+  // Forward raw PTY bytes & lifecycle events for both terminals.
+  for (const [name, t] of [["main", main], ["cli", cli]] as const) {
+    t.on("data", (d: string) => {
+      broadcast(wss, { type: "pty", term: name, data: d });
+    });
+    t.on("dead", (info: { code: number | null; signal: number | null }) => {
+      broadcast(wss, { type: "dead", term: name, code: info.code, signal: info.signal });
+    });
+    t.on("restarted", () => {
+      broadcast(wss, { type: "restarted", term: name });
+    });
+    t.on("restart-failed", (info: { reason: string }) => {
+      broadcast(wss, { type: "restart-failed", term: name, reason: info.reason });
+    });
+  }
 
   wss.on("connection", (ws: WebSocket) => {
     // Send current state on connect
@@ -229,17 +241,35 @@ export function startWebServer(
       total: cfg.iterations,
       phase: loopState.phase,
       best:  bestSoFar(cfg.tsvPath, cfg.direction),
-      alive: term.alive,
+      alive: main.alive && cli.alive,
     } satisfies StatusMsg));
     ws.send(JSON.stringify(getGitStatus(cfg.workdir)));
     ws.send(JSON.stringify(getLogFiles(cfg)));
 
     // Keyboard input → PTY; apply → git reset --hard
-    ws.on("message", (raw: Buffer) => {
+    ws.on("message", async (raw: Buffer) => {
       try {
         const m = JSON.parse(raw.toString());
-        if (m.type === "input")  (term as any).proc?.write(m.data);
-        if (m.type === "resize") (term as any).proc?.resize(m.cols, m.rows);
+        const target = m.term === "cli" ? cli : main;
+
+        if (m.type === "input"  && (m.term === "main" || m.term === "cli")) {
+          target.write(m.data);
+        }
+        if (m.type === "resize" && (m.term === "main" || m.term === "cli")) {
+          target.resize(m.cols, m.rows);
+        }
+        if (m.type === "restart-check" && (m.term === "main" || m.term === "cli")) {
+          const kids = await target.getChildren();
+          ws.send(JSON.stringify({
+            type: "restart-check-result",
+            term: m.term,
+            hasChildren: kids.length > 0,
+            childCmds:   kids.map((k) => k.cmd),
+          }));
+        }
+        if (m.type === "restart" && (m.term === "main" || m.term === "cli")) {
+          await target.restart();
+        }
         if (m.type === "config" && typeof m.dryRun === "boolean") {
           runtime.dryRun = m.dryRun;
           console.error(`[web] dryRun = ${runtime.dryRun}`);
@@ -283,7 +313,7 @@ export function startWebServer(
       total: cfg.iterations,
       phase: loopState.phase,
       best:  bestSoFar(cfg.tsvPath, cfg.direction),
-      alive: term.alive,
+      alive: main.alive && cli.alive,
     } satisfies StatusMsg);
     broadcast(wss, getGitStatus(cfg.workdir));
     broadcast(wss, getLogFiles(cfg));
