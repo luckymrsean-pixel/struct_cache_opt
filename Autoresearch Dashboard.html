@@ -686,11 +686,28 @@ function handleRestartCheck(m) {
   }
 }
 
+let wsReconnectAttempt = 0;
+const WS_DELAYS = [1000, 2000, 5000, 10000, 30000]; // cap at 30s
+
 function connectWS() {
   try {
     ws = new WebSocket(`ws://${location.host}`);
-    ws.onopen  = () => { document.getElementById('ws-dot').className='ws-dot connected'; document.getElementById('ws-label').textContent='已连接'; };
-    ws.onclose = () => { document.getElementById('ws-dot').className='ws-dot demo'; document.getElementById('ws-label').textContent='demo'; ws=null; startDemo(); };
+    ws.onopen = () => {
+      wsReconnectAttempt = 0;
+      document.getElementById('ws-dot').className = 'ws-dot connected';
+      document.getElementById('ws-label').textContent = '已连接';
+    };
+    ws.onclose = () => {
+      ws = null;
+      document.getElementById('ws-dot').className = 'ws-dot demo';
+      document.getElementById('ws-label').textContent = '断开 — 重连中…';
+      const delay = WS_DELAYS[Math.min(wsReconnectAttempt, WS_DELAYS.length - 1)];
+      wsReconnectAttempt++;
+      // After 3 attempts, also fall back to demo so the page doesn't look dead.
+      if (wsReconnectAttempt === 3 && !demoRunning) startDemo();
+      setTimeout(connectWS, delay);
+    };
+    ws.onerror = () => { /* onclose will handle reconnect */ };
     ws.onmessage = e => {
       const m = JSON.parse(e.data);
       if (m.type === 'pty') {
