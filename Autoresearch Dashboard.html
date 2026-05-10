@@ -638,10 +638,15 @@ function applyCommit(hash) {
 let ws = null;
 
 main.term.onData(d => {
-  if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type:'input', data:d }));
+  if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type:'input', term:'main', data:d }));
   else { if(d==='\r') main.term.write('\r\n'); else if(d==='\x7f') main.term.write('\b \b'); else main.term.write(d); }
 });
-main.term.onResize(({cols,rows}) => { if(ws?.readyState===WebSocket.OPEN) ws.send(JSON.stringify({type:'resize',cols,rows})); });
+main.term.onResize(({cols,rows}) => { if(ws?.readyState===WebSocket.OPEN) ws.send(JSON.stringify({type:'resize', term:'main', cols, rows})); });
+
+// Stubs — fully implemented in restart-button (Task 9) and dead-banner (Task 10) tasks.
+function showDeadBanner(term, info)  { console.warn(`[dashboard] ${term} died:`, info); }
+function hideDeadBanner(term)        { /* no-op until Task 10 */ }
+function handleRestartCheck(m)       { /* no-op until Task 9 */ }
 
 function connectWS() {
   try {
@@ -650,11 +655,24 @@ function connectWS() {
     ws.onclose = () => { document.getElementById('ws-dot').className='ws-dot demo'; document.getElementById('ws-label').textContent='demo'; ws=null; startDemo(); };
     ws.onmessage = e => {
       const m = JSON.parse(e.data);
-      if (m.type==='pty')     main.term.write(m.data);
-      if (m.type==='cli')     cli.term.write(m.data);
-      if (m.type==='status')  updateStatus(m);
-      if (m.type==='history') renderHistory(m);
-      if (m.type==='toast')   showToast(m.msg);
+      if (m.type === 'pty') {
+        (m.term === 'cli' ? cli : main).term.write(m.data);
+      } else if (m.type === 'dead') {
+        showDeadBanner(m.term, m);
+      } else if (m.type === 'restarted') {
+        (m.term === 'cli' ? cli : main).term.reset();
+        hideDeadBanner(m.term);
+      } else if (m.type === 'restart-failed') {
+        showToast(`Restart failed (${m.term}): ${m.reason}`);
+      } else if (m.type === 'restart-check-result') {
+        handleRestartCheck(m);
+      } else if (m.type === 'status') {
+        updateStatus(m);
+      } else if (m.type === 'history') {
+        renderHistory(m);
+      } else if (m.type === 'toast') {
+        showToast(m.msg);
+      }
     };
   } catch { setTimeout(startDemo, 0); }
 }
