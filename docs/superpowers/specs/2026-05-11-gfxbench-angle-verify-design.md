@@ -15,7 +15,7 @@
 |---|---|---|
 | WSL2 `perf` 不可用 | `/usr/bin/perf` 是 wrapper，找不到匹配 6.6.114.1-microsoft kernel 的 tools 包；apt 仓里没有 `linux-tools-standard-WSL2` | 直接用 generic kernel 的 perf binary：`/usr/lib/linux-tools/6.8.0-111-generic/perf`，已实测可拿 cache-misses/cycles |
 | Vulkan 看不到 NVIDIA 1080 | `vulkaninfo --summary` 只有 llvmpipe (CPU)；`/usr/lib/wsl/drivers/nv_dispig.../nv-vk64.json` 指向 Windows DLL，Linux loader 用不上 | 从源码编 Mesa-dzn (`-Dvulkan-drivers=microsoft-experimental`)，dzn 是 D3D12-Vulkan 翻译层，借 `/usr/lib/wsl/lib/libd3d12.so` 上 1080 |
-| gfxbench 没经过 ANGLE | 之前 `gl_alu` 报 `"renderer":"D3D12 (NVIDIA 1080)" "vendor":"Microsoft"` —— 走 GL 直接被 WSLg Mesa-on-DX12 接管 | `LD_LIBRARY_PATH=$ANGLE/out/Release` 抢先 + `EGL_PLATFORM_ANGLE_TYPE_ANGLE=vulkan` 强制走 ANGLE-Vulkan 后端；用 result JSON 的 `renderer` 字段含 "ANGLE" 作为正确性 assert |
+| gfxbench 没经过 ANGLE | 之前 `gl_alu` 报 `"renderer":"D3D12 (NVIDIA 1080)" "vendor":"Microsoft"` —— 走 GL 直接被 WSLg Mesa-on-DX12 接管 | `LD_LIBRARY_PATH=$ANGLE/out/Release` 抢先 + `ANGLE_DEFAULT_PLATFORM=vulkan` 强制走 ANGLE-Vulkan 后端；用 result JSON 的 `renderer` 字段含 "ANGLE" 作为正确性 assert |
 
 ## 目标
 
@@ -104,8 +104,10 @@ ANGLE_LIB=/home/fxy/angle/out/Release
 
 # (a) ANGLE 抢先：让 dlopen("libGLESv2.so"/"libEGL.so") 解析到 ANGLE 自己的
 export LD_LIBRARY_PATH=$ANGLE_LIB:$LD_LIBRARY_PATH
-# (b) ANGLE EGL 路径走 Vulkan 后端
-export EGL_PLATFORM_ANGLE_TYPE_ANGLE=vulkan
+# (b) ANGLE 默认平台走 Vulkan 后端（这是 ANGLE 源码 Display::Create 里读的 env，
+#     不是 EGL 标准 attribute 同名常量；后者只在代码里通过 eglGetPlatformDisplay
+#     attrib_list 传递）
+export ANGLE_DEFAULT_PLATFORM=vulkan
 # (c) Vulkan loader 只用 dzn（避开 llvmpipe）
 export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/dzn_icd.x86_64.json
 export DISPLAY=:0
