@@ -62,39 +62,55 @@ guardCmd: |-
     PATH=$AR_DEPOT_TOOLS:$PATH DEPOT_TOOLS_UPDATE=0 \
     autoninja -C out/Release libGLESv2 libEGL 2>&1 | tee build.log
 
-# ── Verify: .text size of vk_helpers.o (proxy metric, pipeline validator) ────
-# Why this and not gfxbench/perf/pahole on this host:
-#  - WSL2 stock `perf` is broken (kernel-tools mismatch); `jq` missing
-#  - gfxbench testfw_app fails X11 window (0x0 size) on this WSLg setup
-#  - pahole 1.31 + ANGLE BUILD.gn patched (-fstandalone-debug,
-#    -gno-simple-template-names) build full DWARF, but vk::ImageHelper
-#    class-type DIE is still not surfaced by pahole's parser on this TU
-#
-# So this verifyCmd uses `size` on the freshly-built vk_helpers.o. Field
-# reordering won't change .text directly, but inlining of getters/setters and
-# member access patterns will — coarse, but enough to validate that the loop
-# can: ideate → apply → build → measure → commit/decide → next iter.
-#
-# To upgrade to the real metric:
-#  - perf:    install linux-tools-standard-WSL2; revert this block to the
-#             perf stat version (see git log of vk-image-helper.yml)
-#  - pahole:  fix the helper script's hand-off so it actually parses
-#             rx::vk::ImageHelper from the .o (see how-to.md)
+# ── Verify: gfxbench gl_5_normal_off via ANGLE-Vulkan/dzn, perf-stat cache-misses ─
+# Pipeline:
+#   ANGLE 抢先 (LD_LIBRARY_PATH)  → ANGLE_DEFAULT_PLATFORM=vulkan
+#   → VK_ICD_FILENAMES=dzn_icd.json  → Mesa dzn → libd3d12.so → Windows host
+#   → NVIDIA GeForce GTX 1080
+# perf binary: generic-kernel /usr/lib/linux-tools/6.8.0-111-generic/perf
+# (WSL2 6.6 kernel 跨内核兼容已实测可用，绕过 linux-tools-standard-WSL2 不在仓里的坑)
+# 断言: result JSON 的 renderer 字段必含 "ANGLE"，否则视作落到错误后端 exit 3
 verifyCmd: |-
   set -o pipefail
-  obj=/home/fxy/angle/out/Debug-pahole/obj/src/libANGLE/renderer/vulkan/angle_vulkan_backend/vk_helpers.o
-  cd /home/fxy/angle && \
-    PATH=$AR_DEPOT_TOOLS:$PATH DEPOT_TOOLS_UPDATE=0 \
-    autoninja -C out/Debug-pahole "${obj#/home/fxy/angle/}" >/dev/null 2>&1
-  text_bytes=$(size "$obj" 2>/dev/null | awk 'NR==2 {print $1}')
+  PERF=/usr/lib/linux-tools/6.8.0-111-generic/perf
+  GFX=/home/fxy/work/gfxbench/tfw-pkg
+  ANGLE_LIB=/home/fxy/angle/out/Release
+
+  export LD_LIBRARY_PATH=$ANGLE_LIB:$LD_LIBRARY_PATH
+  export ANGLE_DEFAULT_PLATFORM=vulkan
+  export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/dzn_icd.x86_64.json
+  export DISPLAY=:0
+
+  PERF_OUT=$(mktemp)
+  RES_DIR=$GFX/results
+  PRE_LATEST=$(ls -t "$RES_DIR" 2>/dev/null | head -1)
+
+  cd "$GFX" && \
+    $PERF stat -e cache-misses,cycles,dTLB-load-misses -x , -o "$PERF_OUT" -- \
+      ./bin/testfw_app --gl_api=gles -t gl_5_normal_off 2>&1 | tail -20
+
+  POST_LATEST=$(ls -t "$RES_DIR" | head -1)
+  [ "$POST_LATEST" = "$PRE_LATEST" ] && { echo "ERR: no new result dir" >&2; exit 2; }
+  JSON="$RES_DIR/$POST_LATEST/gl_5_normal_off.json"
+  [ -s "$JSON" ] || { echo "ERR: no result json" >&2; exit 2; }
+
+  fps=$(jq -r '.results[0].gfx_result.fps' "$JSON")
+  renderer=$(jq -r '.results[0].gfx_result.renderer' "$JSON")
+  misses=$(awk -F, '$3 ~ /^cache-misses/ {print $1; exit}' "$PERF_OUT")
+  cycles=$(awk -F, '$3 ~ /^cycles/ {print $1; exit}' "$PERF_OUT")
+  dtlb=$(awk -F, '$3 ~ /^dTLB-load-misses/ {print $1; exit}' "$PERF_OUT")
+
+  [[ "$renderer" == *ANGLE* ]] || { echo "ERR: not ANGLE backend, renderer=$renderer" >&2; exit 3; }
+
   cd /home/fxy/angle && \
     if git log -1 --format=%s | grep -q '^experiment: iter '; then \
       git commit --amend \
-        -m "$(git log -1 --format=%s)  vk_helpers.o.text=${text_bytes}" \
-        -m "metric: .text bytes of vk_helpers.o (Debug-pahole). proxy until pahole/perf/gfxbench wired up." \
+        -m "$(git log -1 --format=%s)  cache-misses=$misses cycles=$cycles dTLB=$dtlb fps=$fps" \
+        -m "$(cat "$PERF_OUT")" \
         >/dev/null 2>&1 || true; \
     fi
-  echo "$text_bytes"
+
+  echo "$misses"
 
 # ── Diagnostics on build/verify failure ──────────────────────────────────────
 diagCmd: |-
@@ -102,8 +118,8 @@ diagCmd: |-
 
 # ── Comparison ───────────────────────────────────────────────────────────────
 direction:   lower
-metricLabel: text-bytes
-metricUnit:  bytes
+metricLabel: cache-misses
+metricUnit:  events
 
 # ── Dry-run patch (used when the dashboard's Dry Run toggle is ON) ───────────
 dryRunPatch: /tmp/struct_cache_opt.fake.patch
