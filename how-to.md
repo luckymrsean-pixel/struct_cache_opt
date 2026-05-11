@@ -88,10 +88,30 @@ setupCmds(包括 target_skill `git init` 兜底)然后 baseline。
 `git log` subject + 文件列表;在 main terminal 里 `git -C
 /home/fxy/angle log -1 --format=%B` 可以看到完整的 perf 文本。
 
-> **WSL2 现状**:`perf` 与 `gfxbench` 在本机均不工作(kernel-tools
-> 缺、X11 window 0×0)。当前 verifyCmd 退化成 `size vk_helpers.o` 取
-> `.text` 字节作为代理 metric。要换回真 perf:见 yml 注释 + git log
-> 翻 verifyCmd 早期版本。
+> **WSL2 现状(2026-05-11 更新)**:
+> - `perf`: 用 `/usr/lib/linux-tools/6.8.0-111-generic/perf`(generic
+>   kernel 的 binary 在 WSL2 6.6 内核上跨内核兼容已实测可用,绕过
+>   `linux-tools-standard-WSL2` 不在 noble 仓里的坑)。
+> - `Vulkan/NVIDIA 1080`: 通过 Mesa-dzn 翻译层
+>   (`-Dvulkan-drivers=microsoft-experimental`,编于
+>   `/home/fxy/work/mesa-dzn/install`,ICD 注册在
+>   `/usr/share/vulkan/icd.d/dzn_icd.x86_64.json`)。
+>   `vulkaninfo --summary` 应看到 `Microsoft Direct3D12 (NVIDIA GeForce
+>   GTX 1080)` / driverID=`DRIVER_ID_MESA_DOZEN`。
+> - `gfxbench` 没用上:gl_5/gl_4/manhattan31 全要 ES 3.1,但
+>   ANGLE-Vulkan-dzn 客户端 API 天花板是 ES 2.0(dzn 缺 Vulkan 1.2/1.3
+>   扩展);ES 2 场景 (gl_trex_off) 又因 testfw_app 链 GLEW(桌面 GL only)
+>   解析 ANGLE GLES 字符串崩溃。结构性约束,非配置问题。
+> - `workload`: 换成 ANGLE 自带 `angle_perftests
+>   DrawCallPerfBenchmark.Run/gl`,同样经 ANGLE-Vulkan-dzn-1080,每个
+>   draw call 都过 vk::ImageHelper。每轮 25s,cv≈4.33% → verifyCmd
+>   用 3-run-median(共 ~75s/iter)。详见
+>   `docs/superpowers/specs/2026-05-11-gfxbench-angle-verify-design.md`
+>   和 `docs/superpowers/plans/2026-05-11-gfxbench-angle-verify.md`。
+> - `ANGLE 注入`: `LD_LIBRARY_PATH=/home/fxy/angle/out/Release` +
+>   `ANGLE_DEFAULT_PLATFORM=vulkan`。verifyCmd 用 stdout 含
+>   `Microsoft device id` 作 dzn-NVIDIA 链路存活的断言,缺即 exit 3。
+> - `cv 决策`: baseline 4-run cv=4.33% → 选 3-run-median。
 
 ### per-stage stderr 日志(loop.log)
 

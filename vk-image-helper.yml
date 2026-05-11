@@ -62,50 +62,58 @@ guardCmd: |-
     PATH=$AR_DEPOT_TOOLS:$PATH DEPOT_TOOLS_UPDATE=0 \
     autoninja -C out/Release libGLESv2 libEGL 2>&1 | tee build.log
 
-# ── Verify: gfxbench gl_5_normal_off via ANGLE-Vulkan/dzn, perf-stat cache-misses ─
-# Pipeline:
-#   ANGLE 抢先 (LD_LIBRARY_PATH)  → ANGLE_DEFAULT_PLATFORM=vulkan
-#   → VK_ICD_FILENAMES=dzn_icd.json  → Mesa dzn → libd3d12.so → Windows host
-#   → NVIDIA GeForce GTX 1080
+# ── Verify: angle_perftests DrawCallPerfBenchmark via ANGLE-Vulkan/dzn ──────────
+# 为什么不用 gfxbench 了：
+#   gfxbench gl_5_normal 需要 ES 3.1 → ANGLE-Vulkan-dzn 客户端 API 天花板是
+#   ES 2.0（dzn 缺 Vulkan 1.2/1.3 扩展），更老的 ES 2 场景 (gl_trex_off) 又因
+#   testfw_app 链 GLEW（桌面 GL only）解析 ANGLE 的 GLES 版本字符串失败崩溃。
+#   详见 docs/superpowers/specs/2026-05-11-gfxbench-angle-verify-design.md
+#   末尾"已知风险"补充说明。
+# 用 angle_perftests DrawCallPerfBenchmark.Run/gl 替代：
+#   - 同一套 ANGLE-Vulkan-dzn-NVIDIA1080 链路，已实测 25s/run，cv≈3.5%
+#   - 每个 draw call 都过 vk::ImageHelper（framebuffer attachment / texture state）
+#   - 无 EGL/GLEW 协商坑：angle_perftests 是 ANGLE 内部 benchmark，集成最干净
 # perf binary: generic-kernel /usr/lib/linux-tools/6.8.0-111-generic/perf
-# (WSL2 6.6 kernel 跨内核兼容已实测可用，绕过 linux-tools-standard-WSL2 不在仓里的坑)
-# 断言: result JSON 的 renderer 字段必含 "ANGLE"，否则视作落到错误后端 exit 3
+# 断言: stdout 必须出现 "Microsoft device id" (=dzn 暴露 1080)，否则 exit 3
 verifyCmd: |-
   set -o pipefail
   PERF=/usr/lib/linux-tools/6.8.0-111-generic/perf
-  GFX=/home/fxy/work/gfxbench/tfw-pkg
-  ANGLE_LIB=/home/fxy/angle/out/Release
+  ANGLE=/home/fxy/angle/out/Release
 
-  export LD_LIBRARY_PATH=$ANGLE_LIB:$LD_LIBRARY_PATH
+  export LD_LIBRARY_PATH=$ANGLE:$LD_LIBRARY_PATH
   export ANGLE_DEFAULT_PLATFORM=vulkan
   export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/dzn_icd.x86_64.json
   export DISPLAY=:0
 
-  PERF_OUT=$(mktemp)
-  RES_DIR=$GFX/results
-  PRE_LATEST=$(ls -t "$RES_DIR" 2>/dev/null | head -1)
+  # 3-run-median: baseline cv≈4.33% 落在 [3%,10%]，用中位数稳信号
+  M=(); PERF_FILES=(); RUN_FILES=()
+  cd "$ANGLE" && for i in 1 2 3; do
+    PF=$(mktemp); RF=$(mktemp)
+    PERF_FILES+=("$PF"); RUN_FILES+=("$RF")
+    $PERF stat -e cache-misses,cycles,dTLB-load-misses -x , -o "$PF" -- \
+      ./angle_perftests \
+        --gtest_filter=DrawCallPerfBenchmark.Run/gl \
+        --no-warmup --steps-per-trial=200 --max-trials=3 \
+      > "$RF" 2>&1
+    M+=( "$(awk -F, '$3 ~ /^cache-misses/ {print $1; exit}' "$PF")" )
+  done
 
-  cd "$GFX" && \
-    $PERF stat -e cache-misses,cycles,dTLB-load-misses -x , -o "$PERF_OUT" -- \
-      ./bin/testfw_app --gl_api=gles -t gl_5_normal_off 2>&1 | tail -20
-
-  POST_LATEST=$(ls -t "$RES_DIR" | head -1)
-  [ "$POST_LATEST" = "$PRE_LATEST" ] && { echo "ERR: no new result dir" >&2; exit 2; }
-  JSON="$RES_DIR/$POST_LATEST/gl_5_normal_off.json"
-  [ -s "$JSON" ] || { echo "ERR: no result json" >&2; exit 2; }
-
-  fps=$(jq -r '.results[0].gfx_result.fps' "$JSON")
-  renderer=$(jq -r '.results[0].gfx_result.renderer' "$JSON")
-  misses=$(awk -F, '$3 ~ /^cache-misses/ {print $1; exit}' "$PERF_OUT")
+  SORTED=$(printf '%s\n' 0 1 2 | while read i; do echo "$i ${M[$i]}"; done | sort -k2 -n)
+  MED_IDX=$(echo "$SORTED" | sed -n '2p' | awk '{print $1}')
+  misses=$(echo "$SORTED" | sed -n '2p' | awk '{print $2}')
+  PERF_OUT=${PERF_FILES[$MED_IDX]}
+  RUN_OUT=${RUN_FILES[$MED_IDX]}
   cycles=$(awk -F, '$3 ~ /^cycles/ {print $1; exit}' "$PERF_OUT")
   dtlb=$(awk -F, '$3 ~ /^dTLB-load-misses/ {print $1; exit}' "$PERF_OUT")
+  wall=$(awk '/^\*RESULT DrawCallPerf_gl\.wall_time/ {print $4; exit}' "$RUN_OUT")
+  cv=$(awk '/^Coefficient of variation:/ {print $4; exit}' "$RUN_OUT")
 
-  [[ "$renderer" == *ANGLE* ]] || { echo "ERR: not ANGLE backend, renderer=$renderer" >&2; exit 3; }
+  grep -q "Microsoft device id" "$RUN_OUT" || { echo "ERR: not dzn-Microsoft path (dzn ICD lost?)" >&2; tail -5 "$RUN_OUT" >&2; exit 3; }
 
   cd /home/fxy/angle && \
     if git log -1 --format=%s | grep -q '^experiment: iter '; then \
       git commit --amend \
-        -m "$(git log -1 --format=%s)  cache-misses=$misses cycles=$cycles dTLB=$dtlb fps=$fps" \
+        -m "$(git log -1 --format=%s)  cache-misses=$misses cycles=$cycles dTLB=$dtlb wall_ns=$wall cv=$cv" \
         -m "$(cat "$PERF_OUT")" \
         >/dev/null 2>&1 || true; \
     fi
