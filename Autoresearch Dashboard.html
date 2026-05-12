@@ -171,6 +171,14 @@ label.field-lbl { display:block; font-size:10px; color:var(--dim); margin-bottom
 .term-label .tl-dot.active { background:var(--green); }
 .term-label .tl-dot.dead { background:var(--red); }
 .term-inner { position:absolute; inset:22px 0 0 0; padding:4px; }
+/* term-main is a read-only mirror; let long Stage 1 LLM lines (unified diffs)
+   scroll horizontally instead of wrapping. xterm has no native horizontal
+   scroll — we widen cols via JS and open up the inner viewport's clip. */
+#term-main-wrap .term-inner { overflow-x:auto; overflow-y:hidden; }
+#term-main-wrap .term-inner .xterm,
+#term-main-wrap .term-inner .xterm-viewport,
+#term-main-wrap .term-inner .xterm-screen { overflow:visible !important; }
+#term-main-wrap .term-inner .xterm-viewport { width:auto !important; }
 .restart-btn {
   background: transparent; border: 1px solid rgba(255,255,255,0.15);
   color: var(--dim); padding: 0 6px; border-radius: 3px; cursor: pointer;
@@ -361,17 +369,29 @@ const TERM_THEME = {
   blue:'#58a6ff', magenta:'#bc8cff', cyan:'#39c5cf', white:'#c9d1d9',
 };
 
-function makeTerm(elId) {
+// Fixed wide column count for the Stage-1-mirror pane so long diff lines
+// don't wrap inside xterm. Pair with `#term-main-wrap .term-inner { overflow-x:auto }`.
+const MAIN_WIDE_COLS = 240;
+
+function makeTerm(elId, opts = {}) {
   const t = new Terminal({ theme:TERM_THEME, fontFamily:"'JetBrains Mono','Fira Code',monospace", fontSize:12, lineHeight:1.45, cursorBlink:true });
   const fit = new FitAddon.FitAddon();
   t.loadAddon(fit);
   t.open(document.getElementById(elId));
   fit.fit();
-  return { term:t, fit };
+  if (opts.wideCols) t.resize(opts.wideCols, t.rows);
+  return { term:t, fit, wideCols: opts.wideCols || null };
 }
 
-const main = makeTerm('term-main');   // read-only mirror of loopTerm
-const cli  = makeTerm('term-cli');    // interactive shell
+// Refit while preserving a forced wideCols override (FitAddon would otherwise
+// re-derive cols from container width and clobber it).
+function fitTerm(o) {
+  o.fit.fit();
+  if (o.wideCols) o.term.resize(o.wideCols, o.term.rows);
+}
+
+const main = makeTerm('term-main', { wideCols: MAIN_WIDE_COLS });   // read-only mirror of loopTerm
+const cli  = makeTerm('term-cli');                                  // interactive shell
 cli.term.focus();
 
 // Wire cli terminal: forward keystrokes and resize to server (term:"cli").
@@ -392,7 +412,7 @@ cli.term.onResize(({cols,rows}) => {
 });
 
 // Resize both on window resize
-new ResizeObserver(() => { main.fit.fit(); cli.fit.fit(); }).observe(document.getElementById('center'));
+new ResizeObserver(() => { fitTerm(main); fitTerm(cli); }).observe(document.getElementById('center'));
 
 // ─── Divider drag to resize ───────────────────────────────────────────────────
 
@@ -407,7 +427,7 @@ document.addEventListener('mousemove', e => {
   const rect = centerEl.getBoundingClientRect();
   const pct  = Math.max(20, Math.min(70, (1 - (e.clientY - rect.top) / rect.height) * 100));
   cliWrap.style.flex = `0 0 ${pct}%`;
-  main.fit.fit(); cli.fit.fit();
+  fitTerm(main); fitTerm(cli);
 });
 document.addEventListener('mouseup', () => { dragging = false; });
 
