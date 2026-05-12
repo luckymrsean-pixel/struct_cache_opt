@@ -104,14 +104,18 @@ setupCmds(包括 target_skill `git init` 兜底)然后 baseline。
 >   解析 ANGLE GLES 字符串崩溃。结构性约束,非配置问题。
 > - `workload`: 换成 ANGLE 自带 `angle_perftests
 >   DrawCallPerfBenchmark.Run/gl`,同样经 ANGLE-Vulkan-dzn-1080,每个
->   draw call 都过 vk::ImageHelper。每轮 25s,cv≈4.33% → verifyCmd
->   用 3-run-median(共 ~75s/iter)。详见
+>   draw call 都过 vk::ImageHelper。每轮 25s。详见
 >   `docs/superpowers/specs/2026-05-11-gfxbench-angle-verify-design.md`
 >   和 `docs/superpowers/plans/2026-05-11-gfxbench-angle-verify.md`。
 > - `ANGLE 注入`: `LD_LIBRARY_PATH=/home/fxy/angle/out/Release` +
 >   `ANGLE_DEFAULT_PLATFORM=vulkan`。verifyCmd 用 stdout 含
 >   `Microsoft device id` 作 dzn-NVIDIA 链路存活的断言,缺即 exit 3。
-> - `cv 决策`: baseline 4-run cv=4.33% → 选 3-run-median。
+> - `cv 决策`: GTX 1080 Pascal 不支持 nvidia-smi --lock-gpu-clocks,
+>   每 run 从 idle 139 MHz 爬升导致原始 cv≈4.83%。verifyCmd 每个
+>   measure 前加一段 angle_perftests warmup(steps=300 trials=1) 让
+>   GPU 升频留在 ramp 之后,4-run cv 降到 **1.93%**。配合 3-run-median
+>   外包,有效信号 cv≈1.1%。每 iter verify ~100s(含 3× warmup+measure)。
+>   Host CPU+memory 锁频另由 Windows 侧处理。
 
 ### per-stage stderr 日志(loop.log)
 

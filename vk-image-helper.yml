@@ -85,9 +85,14 @@ verifyCmd: |-
   export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/dzn_icd.x86_64.json
   export DISPLAY=:0
 
-  # 3-run-median: baseline cv≈4.33% 落在 [3%,10%]，用中位数稳信号
+  # 3-run-median + 每 run 前外部 GPU warmup：
+  # 不带 warmup: cv≈4.83% (GTX 1080 Pascal 不能 nvidia-smi 锁频，每 run 从
+  # 139 MHz idle 爬升)；带 warmup 4-run cv 实测 1.93%。warmup 跑 300 steps
+  # ~8s 让 GPU clk 升上来，紧跟 perf-stat 时 GPU 已在高频。
   M=(); PERF_FILES=(); RUN_FILES=()
   cd "$ANGLE" && for i in 1 2 3; do
+    ./angle_perftests --gtest_filter=DrawCallPerfBenchmark.Run/gl \
+      --no-warmup --steps-per-trial=300 --max-trials=1 >/dev/null 2>&1
     PF=$(mktemp); RF=$(mktemp)
     PERF_FILES+=("$PF"); RUN_FILES+=("$RF")
     $PERF stat -e cache-misses,cycles,dTLB-load-misses -x , -o "$PF" -- \
@@ -106,7 +111,8 @@ verifyCmd: |-
   cycles=$(awk -F, '$3 ~ /^cycles/ {print $1; exit}' "$PERF_OUT")
   dtlb=$(awk -F, '$3 ~ /^dTLB-load-misses/ {print $1; exit}' "$PERF_OUT")
   wall=$(awk '/^\*RESULT DrawCallPerf_gl\.wall_time/ {print $4; exit}' "$RUN_OUT")
-  cv=$(awk '/^Coefficient of variation:/ {print $4; exit}' "$RUN_OUT")
+  # cv across our outer 3-run-median (angle_perftests --no-verbose 不打 Coefficient 行)
+  cv=$(python3 -c "import statistics; v=[${M[0]},${M[1]},${M[2]}]; m=statistics.mean(v); s=statistics.stdev(v); print(f'{s/m*100:.2f}%')")
 
   grep -q "Microsoft device id" "$RUN_OUT" || { echo "ERR: not dzn-Microsoft path (dzn ICD lost?)" >&2; tail -5 "$RUN_OUT" >&2; exit 3; }
 
