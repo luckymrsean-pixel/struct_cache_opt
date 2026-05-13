@@ -88,6 +88,10 @@ export function load(path: string): Config {
   const arIters = Number(process.env.AR_ITERS ?? 0);
   if (arIters > 0) {
     cfg.iterations = arIters;
+    // Lift plateauPatience so the bench actually completes N iters before the
+    // early-exit guard kicks in — otherwise eval_N drifts off the requested N
+    // and per-meta-iter metrics become incomparable.
+    cfg.plateauPatience = Math.max(cfg.plateauPatience, arIters);
   }
 
   return cfg;
