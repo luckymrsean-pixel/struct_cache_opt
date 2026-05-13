@@ -1,0 +1,4 @@
+# meta-bench writes per-iter artifacts here. Track only structure, not content.
+*
+!.gitignore
+!.gitkeep

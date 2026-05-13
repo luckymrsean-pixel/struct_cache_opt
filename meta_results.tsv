@@ -1,0 +1,2 @@
+# direction=multi  primary=M1  baseline_tag=meta-baseline
+meta_iter	skill_tag	parent_tag	eval_N	M1_total_drop	M2_apply_rate	M3_keep_rate	M4_struct_cov	M5_cv	decision	reason	ts	run_dir
