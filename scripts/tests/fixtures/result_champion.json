@@ -1,0 +1,10 @@
+{
+  "eval_N": 10,
+  "baseline_metric": 100000000,
+  "final_metric": 80000000,
+  "M1_total_drop": 20000000,
+  "M2_apply_rate": 0.8,
+  "M3_keep_rate": 0.4,
+  "M4_struct_coverage": 2,
+  "M5_keep_delta_cv": 0.15
+}
