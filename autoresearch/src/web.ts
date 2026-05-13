@@ -298,6 +298,38 @@ export function startWebServer(
       return;
     }
 
+    if (url === "/meta-versions.html") {
+      const candidates = [
+        join(__dirname, "..", "..", "meta-versions.html"),
+        join(process.cwd(), "meta-versions.html"),
+        join(process.cwd(), "..", "meta-versions.html"),
+      ];
+      const p = candidates.find((x) => existsSync(x));
+      if (p) {
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(readFileSync(p));
+      } else {
+        res.writeHead(404); res.end("meta-versions.html not found");
+      }
+      return;
+    }
+
+    if (url.startsWith("/meta_results.tsv")) {
+      const candidates = [
+        join(__dirname, "..", "..", "meta_results.tsv"),
+        join(process.cwd(), "meta_results.tsv"),
+        join(process.cwd(), "..", "meta_results.tsv"),
+      ];
+      const p = candidates.find((x) => existsSync(x));
+      if (p) {
+        res.writeHead(200, { "Content-Type": "text/tab-separated-values" });
+        res.end(readFileSync(p));
+      } else {
+        res.writeHead(404); res.end("meta_results.tsv not found");
+      }
+      return;
+    }
+
     if (existsSync(dashPath)) {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       res.end(readFileSync(dashPath));

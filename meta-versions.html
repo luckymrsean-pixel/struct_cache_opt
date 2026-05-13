@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Skill versions — meta-loop</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 1.5rem; background: #0f1115; color: #e5e7eb; }
+  h1 { font-size: 1.2rem; margin: 0 0 1rem 0; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.85rem; }
+  th, td { padding: 6px 10px; border-bottom: 1px solid #2a2f3a; text-align: left; }
+  th { background: #1a1f2b; position: sticky; top: 0; }
+  tr.champion { background: #1c2e1c; }
+  tr.manual { background: #2e2a1c; }
+  tr.revert { color: #888; }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.75rem; }
+  .pill-advance { background: #1f7a1f; color: white; }
+  .pill-revert  { background: #7a1f1f; color: white; }
+  .pill-manual  { background: #7a6c1f; color: white; }
+  .pill-baseline { background: #444; color: white; }
+  .refresh { margin: 0.5rem 0 1rem 0; font-size: 0.8rem; color: #888; }
+  .refresh button { background: #2a2f3a; color: #e5e7eb; border: 1px solid #444; padding: 4px 10px; cursor: pointer; }
+</style>
+</head>
+<body>
+<h1>Skill versions — meta-loop</h1>
+<div class="refresh">
+  <button onclick="load()">&#x21BB; Refresh</button>
+  <span id="champion-info"></span>
+</div>
+<table id="tbl">
+  <thead><tr id="head"></tr></thead>
+  <tbody id="body"></tbody>
+</table>
+
+<script>
+async function load() {
+  const res = await fetch('/meta_results.tsv?t=' + Date.now());
+  const text = await res.text();
+  const lines = text.split('\n').filter(l => l && !l.startsWith('#'));
+  if (lines.length === 0) {
+    document.getElementById('body').innerHTML = '<tr><td>(no meta-iter rows yet)</td></tr>';
+    return;
+  }
+
+  const header = lines[0].split('\t');
+  document.getElementById('head').innerHTML = header.map(h => '<th>' + h + '</th>').join('');
+
+  const rows = lines.slice(1).map(l => l.split('\t'));
+  const decIdx = header.indexOf('decision');
+  const tagIdx = header.indexOf('skill_tag');
+
+  // Champion = last row with decision=advance, or first row (baseline)
+  let championTag = rows.length > 0 ? rows[0][tagIdx] : null;
+  for (const r of rows) {
+    if (r[decIdx] === 'advance') championTag = r[tagIdx];
+  }
+
+  const body = rows.map(r => {
+    const dec = r[decIdx];
+    const cls = (r[tagIdx] === championTag ? 'champion ' : '') + dec;
+    const pillCls = 'pill pill-' + dec;
+    const cells = r.map((v, i) => {
+      if (i === decIdx) return '<td><span class="' + pillCls + '">' + v + '</span></td>';
+      return '<td>' + v + '</td>';
+    }).join('');
+    return '<tr class="' + cls + '">' + cells + '</tr>';
+  });
+  document.getElementById('body').innerHTML = body.join('');
+  document.getElementById('champion-info').textContent = 'champion: ' + (championTag || '(none)');
+}
+
+load();
+setInterval(load, 30000);
+</script>
+</body>
+</html>
