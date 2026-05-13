@@ -79,5 +79,16 @@ export function load(path: string): Config {
   }
   if (!Array.isArray(cfg.scope)) cfg.scope = [];
 
+  // Env-var overrides for meta-bench isolation.
+  // AR_TSV  : redirect tsv output (default uses cfg.tsvPath from yml)
+  // AR_ITERS: cap iterations for a bench run (must be > 0 to take effect)
+  if (process.env.AR_TSV) {
+    cfg.tsvPath = process.env.AR_TSV;
+  }
+  const arIters = Number(process.env.AR_ITERS ?? 0);
+  if (arIters > 0) {
+    cfg.iterations = arIters;
+  }
+
   return cfg;
 }
