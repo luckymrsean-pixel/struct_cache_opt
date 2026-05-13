@@ -1,0 +1,13 @@
+# direction=lower
+iter	status	metric	delta	exit	warns	desc	ts
+0	baseline	100000000		0	0	initial	2026-05-13T00:00:00Z
+1	keep	90000000	-10000000	0	0	keep ImageHelper	2026-05-13T00:05:00Z
+2	discard			128	0	apply-fail	2026-05-13T00:10:00Z
+3	keep	85000000	-5000000	0	0	keep BufferHelper	2026-05-13T00:15:00Z
+4	discard	90000000	5000000	0	0	regress	2026-05-13T00:20:00Z
+5	keep	80000000	-5000000	0	0	keep ImageHelper	2026-05-13T00:25:00Z
+6	discard			128	0	apply-fail	2026-05-13T00:30:00Z
+7	keep	75000000	-5000000	0	0	keep ImageHelper	2026-05-13T00:35:00Z
+8	discard			128	0	apply-fail	2026-05-13T00:40:00Z
+9	discard	78000000	3000000	0	0	regress	2026-05-13T00:45:00Z
+10	keep	72000000	-3000000	0	0	keep RenderPassCache	2026-05-13T00:50:00Z
