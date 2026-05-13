@@ -22,11 +22,10 @@ scope:
   - src/libANGLE/renderer/vulkan/vk_helpers.cpp
 
 # ── Skill ────────────────────────────────────────────────────────────────────
-# struct_cache_opt skill = the LLM-driven diff generator.
-# Lives under /mnt/f/code2/target_skill/, which is itself a git repo so
-# edits to the skill (prompt.tmpl, helpers, etc.) are versioned alongside
-# experiment results.
-skillDir: /mnt/f/code2/target_skill/struct_cache_opt
+# struct_layout_opt skill = the LLM-driven diff generator.
+# Sibling skill pahole_extractor is invoked by struct_layout_opt internally.
+# Both live under /mnt/f/code2/target_skill/, versioned in that repo.
+skillDir: /mnt/f/code2/target_skill/struct_layout_opt
 
 # ── Per-iteration context fed to the skill on stdin ──────────────────────────
 # Empty: loop.ts already prepends `git log -20 --oneline` + tail(results.tsv).
