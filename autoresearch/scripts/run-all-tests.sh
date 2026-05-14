@@ -25,6 +25,7 @@ run_suite "M1  terminal" "tsx scripts/test-term.ts"
 run_suite "M3  interactive-pty" "tsx scripts/test-interactive-pty.ts"
 run_suite "M4  errors"   "tsx scripts/test-errors.ts"
 run_suite "M5  stage-log" "tsx scripts/test-stage-log.ts"
+run_suite "M6  skill-state" "tsx scripts/test-skill-state.ts"
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
