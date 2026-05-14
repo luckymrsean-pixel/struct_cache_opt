@@ -155,18 +155,25 @@ grep -q 'AR_HEADLESS:-1' /mnt/f/code2/struct_cache_opt/scripts/meta-bench.sh && 
 
 Expected: all three OK lines print. Any missing OK → go back and fix the corresponding earlier task.
 
-- [ ] **Step 2: Open the dashboard in a browser before launching the run**
+- [ ] **Step 2: Pick a monitoring mode (dashboard or terminal tail)**
 
-Open `http://localhost:8080` (or `http://<WSL IP>:8080` if behind a proxy — `hostname -I` for the IP). Page will say "WebSocket disconnected" since autoresearch isn't up yet; that's fine, it reconnects automatically once the run boots.
+`AR_HEADLESS` has two failure-prone modes:
 
-- [ ] **Step 3: Launch the smoke run in the foreground**
+| Mode | Behavior | Use when |
+|---|---|---|
+| `AR_HEADLESS=0` | Dashboard at `http://localhost:8080` reachable, but the loop **pauses at Stage 0 awaiting a human "Start" click in the dashboard** ([src/loop.ts:181](../../autoresearch/src/loop.ts#L181)). Will hang forever unattended. | An operator is at the keyboard and will click Start |
+| `AR_HEADLESS=1` (default) | No dashboard; loop auto-runs N iters end-to-end. Progress visible only via `tail -f meta-runs/<tag>/autoresearch.log` or `meta-runs/smoke-controller.log`. | Unattended / scripted execution |
+
+For an unattended smoke pass, **omit `AR_HEADLESS`** so it defaults to `1`. Open a side terminal with `tail -f /mnt/f/code2/struct_cache_opt/meta-runs/skill-v0/autoresearch.log` if you want live visibility.
+
+- [ ] **Step 3: Launch the smoke run**
 
 From `/mnt/f/code2/struct_cache_opt`:
 ```bash
-AR_HEADLESS=0 ./scripts/meta-bench.sh --N 2 --skill-tag skill-v0
+./scripts/meta-bench.sh --N 2 --skill-tag skill-v0 2>&1 | tee meta-runs/smoke-controller.log
 ```
 
-Expected wall time: 10–20 minutes. Watch the dashboard for Stage 1 (diff) → Stage 3 (build) → Stage 4 (verify) progressing through 2 inner iters. The terminal shows the script's `+ <command>` traces and the autoresearch log via tee.
+Expected wall time: 10–20 minutes. The terminal shows the script's `+ <command>` traces; autoresearch's per-stage logs are in `meta-runs/skill-v0/autoresearch.log`.
 
 - [ ] **Step 4: Verify the 4-item smoke checklist**
 
@@ -189,7 +196,7 @@ grep -c 'Stage' meta-runs/skill-v0/autoresearch.log
 Expected:
 - Check 1: prints non-round numbers, eval_N=2, no AssertionError
 - Check 2: ≥2 lines (1 header + ≥1 data row; some iters may apply-fail)
-- Check 3: row begins with `0\tskill-v0\tskill-v0\t2\t...\tadvance\t...` (advance because candidate == champion)
+- Check 3: row begins with `0\tskill-v0\tskill-v0\t2\t...\tmanual\twithin noise band\t...` — `manual`, not `advance`. The decide rule classifies a self-comparison as "within noise band" since the candidate's M1 equals the champion's M1 by construction. That's correct behavior for a bootstrap row.
 - Check 4: ≥7 (at least one full pipeline pass; usually 14+ for 2 iters)
 
 - [ ] **Step 5: Stop conditions — debug before proceeding if any apply**
@@ -230,10 +237,10 @@ Run: `rm meta-runs/skill-v0/result.json`
 - [ ] **Step 2: Launch the real baseline run**
 
 ```bash
-AR_HEADLESS=0 ./scripts/meta-bench.sh --N 10 --skill-tag skill-v0
+./scripts/meta-bench.sh --N 10 --skill-tag skill-v0 2>&1 | tee meta-runs/skill-v0-N10.controller.log
 ```
 
-Expected wall time: 50–100 minutes. Same dashboard. Same monitoring pattern as smoke; watch for periodic inner-loop keep/revert decisions.
+Expected wall time: 50–100 minutes. Headless (default). `tail -f meta-runs/skill-v0/autoresearch.log` in a side terminal for live visibility.
 
 - [ ] **Step 3: Verify baseline shape**
 
@@ -256,7 +263,7 @@ tail -1 meta_results.tsv
 
 Expected:
 - `eval_N=10`, no AssertionError
-- last meta_results.tsv row: `1\tskill-v0\tskill-v0\t10\t...\tadvance\t...`
+- last meta_results.tsv row: `1\tskill-v0\tskill-v0\t10\t...\tmanual\twithin noise band\t...` (still a self-comparison, so still `manual`)
 
 - [ ] **Step 4: Decision gate — sanity-check the baseline**
 
@@ -368,10 +375,10 @@ Expected: shows the `meta(rules):` commit subject from Step 4.
 
 ```bash
 cd /mnt/f/code2/struct_cache_opt
-AR_HEADLESS=0 ./scripts/meta-bench.sh --N 10 --skill-tag skill-v2
+./scripts/meta-bench.sh --N 10 --skill-tag skill-v2 2>&1 | tee meta-runs/skill-v2-N10.controller.log
 ```
 
-Expected wall time: 50–100 minutes. Same dashboard / same monitoring.
+Expected wall time: 50–100 minutes. Headless (default). `tail -f meta-runs/skill-v2/autoresearch.log` for visibility.
 
 - [ ] **Step 2: Verify the run produced the expected artifacts**
 
@@ -421,8 +428,8 @@ Run: `grep -v '^#' /mnt/f/code2/struct_cache_opt/meta_results.tsv | tail -n +2`
 
 Expected: exactly 3 lines, in order:
 ```
-0	skill-v0	skill-v0	2	... advance ...
-1	skill-v0	skill-v0	10	... advance ...
+0	skill-v0	skill-v0	2	... manual	within noise band ...
+1	skill-v0	skill-v0	10	... manual	within noise band ...
 2	skill-v2	skill-v0	10	... <advance|revert|manual> ...
 ```
 
@@ -481,7 +488,14 @@ Plan complete.
 
 ## Notes for the implementer
 
-- **The benchmarks are slow.** Tasks 3, 4, and 6 each include a multi-tens-of-minutes wait. Don't poll the dashboard nervously — the script ends cleanly when done. Use the time to draft the rule 8 wording (Task 5) ahead of Task 4 finishing.
-- **The dashboard URL might need the WSL IP.** If `http://localhost:8080` shows "Bad Gateway" or never connects, try `hostname -I` and use the IP directly. See `network-in-proxy-environments` skill if curl-to-localhost is also flaky.
+- **The benchmarks are slow.** Tasks 3, 4, and 6 each include a multi-tens-of-minutes wait. Don't poll the dashboard nervously — the script ends cleanly when done.
 - **Don't skip the decision gate (Task 4 Step 4).** Running a meta-iter on a broken baseline produces noise, not signal — you'll spend hours and learn nothing.
 - **The pre-commit hook only checks `meta:`-prefixed commits.** `contract:`-prefixed commits bypass it intentionally. Don't fight the hook; if it rejects, it caught you touching a frozen file.
+
+## Setup prerequisites discovered during first run (2026-05-14)
+
+These weren't in the original plan; folded in during execution.
+
+1. **ANGLE `meta-baseline` tag must exist** before any meta-bench run. The script does `git -C $WORKDIR reset --hard meta-baseline`. If the tag is absent, create it at the desired baseline commit: `git -C /home/fxy/angle tag meta-baseline <sha>`.
+2. **meta-bench.sh bootstrap fix** (commit `b5d9096`): when candidate tag equals champion tag and no prior `champion result.json` exists, the script now logs a bootstrap notice and proceeds instead of exiting 2. Required for the very first run on a fresh meta-loop.
+3. **Stale autoresearch processes can hold port 8080**, which doesn't block headless runs but does block `AR_HEADLESS=0`. Check `ss -lntp | grep :8080` before any run that needs the dashboard; `pkill -f 'tsx src/index.ts.*vk-image-helper'` is the cleanup hammer if previous loop sessions left orphans.
