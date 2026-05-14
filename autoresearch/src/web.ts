@@ -4,37 +4,20 @@
  * 启动方式（在 runLoop 启动前调用）：
  *   startWebServer(cfg, cli, loopTerm, 8080)
  *
- * Wire term 名:
- *   - "main" : 自动循环 PTY (loopTerm) 的只读镜像 — 在 dashboard 顶部面板
- *              展示 ideate / apply / build / verify 输出
- *   - "cli"  : 用户可输入的 InteractivePty (claude login / 调试)
- *
- * 服务端只接受 term==="cli" 的 input / resize / restart-* 帧;
- * term==="main" 的同类帧会被忽略 (loopTerm 由 runLoop 拥有)。
- *
  * 协议（JSON 帧）：
  *   server → client:
- *     { type:"pty",                  term, data:string }      原始 PTY 字节
- *     { type:"dead",                 term, code, signal }      PTY 异常退出
- *     { type:"restarted",            term }                   重启完成
- *     { type:"restart-failed",       term, reason:string }    重启失败
- *     { type:"restart-check-result", term, hasChildren, childCmds:string[] }
- *     { type:"status",  iter, total, phase, best, alive }     alive = cli && loopTerm
- *     { type:"git",     branch, lastCommit, changed:string[] }
- *     { type:"log",     files: LogFile[] }
- *     { type:"history", commits, head }
- *     { type:"skill-state",          ...SkillState }   每 2s 推 + 握手
- *     { type:"stage-log-updated",    stage:number }    fs.watch 触发
- *     { type:"toast",   msg:string }
+ *     { type:"status",            iter, total, phase, best, alive, stages } 每 2s 推
+ *     { type:"git",               branch, lastCommit, changed:string[] }    每 2s 推
+ *     { type:"log",               files: LogFile[] }                        每 2s 推
+ *     { type:"history",           commits, head }                           每 2s 推 + 握手
+ *     { type:"skill-state",       ...SkillState }                           每 2s 推 + 握手
+ *     { type:"stage-log-updated", stage:number }                            fs.watch 触发
+ *     { type:"toast",             msg:string }                              一次性
  *
- *   client → server (只对 term==="cli" 有效):
- *     { type:"input",         term:"cli", data:string }
- *     { type:"resize",        term:"cli", cols, rows }
- *     { type:"restart-check", term:"cli" }                    查询有无子进程
- *     { type:"restart",       term:"cli" }                    执行重启
- *     { type:"config",  dryRun:boolean }
- *     { type:"loop",    action:"start"|"stop", iterations? }
- *     { type:"apply",   hash:string }
+ *   client → server:
+ *     { type:"config", dryRun:boolean }
+ *     { type:"loop",   action:"start"|"stop", iterations? }
+ *     { type:"apply",  hash:string }
  */
 
 import * as http from "http";
@@ -124,25 +107,12 @@ function broadcast(wss: WebSocketServer, msg: object): void {
   // lines we actually care about. Keep: toast, dead, restarted,
   // restart-failed, restart-check-result, anything novel.
   const t = (msg as { type?: string }).type;
-  const ROUTINE = new Set(["pty", "status", "git", "log", "history"]);
+  const ROUTINE = new Set(["status", "git", "log", "history", "skill-state"]);
   if (t && !ROUTINE.has(t)) {
     console.error(`[web] broadcast type=${t} → ${n} client(s)`);
   }
 }
 
-// PTY ring buffers: keep the last N bytes per terminal so a polling client
-// (no WebSocket) can fetch a full snapshot via /api/state.
-// PTY ring buffers: keep the last N bytes per terminal so a polling client
-// (no WebSocket) can fetch a full snapshot via /api/state.
-//
-// Wire term names:
-//   - "main" carries loopTerm bytes (read-only mirror of automation PTY)
-//   - "cli"  is the user-interactive PTY (claude login, debug, …)
-const PTY_BUF_BYTES = 64 * 1024;
-const ptyBuf: Record<"main" | "cli", string> = { main: "", cli: "" };
-function ptyAppend(name: "main" | "cli", d: string): void {
-  ptyBuf[name] = (ptyBuf[name] + d).slice(-PTY_BUF_BYTES);
-}
 
 function getGitStatus(workdir: string): GitMsg {
   const run = (cmd: string) => {
@@ -358,7 +328,6 @@ export function startWebServer(
         git:     getGitStatus(cfg.workdir),
         logs:    getLogFiles(cfg),
         history: getHistory(cfg),
-        pty:     { main: ptyBuf.main, cli: ptyBuf.cli },
       };
       res.writeHead(200, {
         "Content-Type":  "application/json; charset=utf-8",
@@ -413,28 +382,6 @@ export function startWebServer(
 
   const wss = new WebSocketServer({ server });
 
-  // Forward raw PTY bytes & lifecycle events for the interactive cli pane.
-  cli.on("data", (d: string) => {
-    ptyAppend("cli", d);
-    broadcast(wss, { type: "pty", term: "cli", data: d });
-  });
-  cli.on("dead", (info: { code: number | null; signal: number | null }) => {
-    broadcast(wss, { type: "dead", term: "cli", code: info.code, signal: info.signal });
-  });
-  cli.on("restarted", () => {
-    broadcast(wss, { type: "restarted", term: "cli" });
-  });
-  cli.on("restart-failed", (info: { reason: string }) => {
-    broadcast(wss, { type: "restart-failed", term: "cli", reason: info.reason });
-  });
-
-  // Lifecycle for the loop's automation PTY → flag "main" pane as dead if
-  // it ever exits. Bytes themselves arrive via the stderr mirror below
-  // (loopTerm already writes its bytes to process.stderr).
-  loopTerm.on("dead", () => {
-    broadcast(wss, { type: "dead", term: "main", code: null, signal: null });
-  });
-
   // Watch .ar/stage-*.log for changes; notify clients to re-fetch via REST.
   for (let i = 0; i <= 6; i++) {
     const p = stageLogPath(cfg.workdir, i);
@@ -459,36 +406,6 @@ export function startWebServer(
     armWatcher();
   }
 
-  // Mirror everything that goes to process.stderr (loopTerm PTY bytes,
-  // console.error lines from loop.ts / web.ts, anything else) into the
-  // "main" pane of the dashboard. This makes the dashboard's top pane a
-  // live, read-only view of loop.log without needing a separate tail.
-  //
-  // Safety: `pty` is in the ROUTINE broadcast set so the call below does
-  // NOT itself emit a console.error → no recursion.
-  const origStderrWrite = process.stderr.write.bind(process.stderr) as (
-    chunk: string | Uint8Array,
-    encoding?: BufferEncoding | ((err?: Error) => void),
-    cb?: (err?: Error) => void,
-  ) => boolean;
-  type WriteFn = typeof process.stderr.write;
-  process.stderr.write = ((
-    chunk: string | Uint8Array,
-    encoding?: BufferEncoding | ((err?: Error) => void),
-    cb?: (err?: Error) => void,
-  ): boolean => {
-    try {
-      const s = typeof chunk === "string"
-        ? chunk
-        : Buffer.isBuffer(chunk)
-          ? chunk.toString("utf8")
-          : Buffer.from(chunk).toString("utf8");
-      ptyAppend("main", s);
-      broadcast(wss, { type: "pty", term: "main", data: s });
-    } catch { /* never break stderr because of mirror failure */ }
-    return origStderrWrite(chunk, encoding as BufferEncoding, cb);
-  }) as WriteFn;
-
   wss.on("connection", (ws: WebSocket, req) => {
     const peer = req.socket.remoteAddress ?? "?";
     console.error(`[web] WS connect from ${peer} (clients=${wss.clients.size})`);
@@ -498,11 +415,6 @@ export function startWebServer(
     ws.on("error", (e: Error) => {
       console.error(`[web] WS error ${peer}: ${e.message}`);
     });
-
-    // Replay the PTY ring buffers so a fresh client sees terminal history,
-    // not just events from this point forward.
-    if (ptyBuf.main) ws.send(JSON.stringify({ type: "pty", term: "main", data: ptyBuf.main }));
-    if (ptyBuf.cli)  ws.send(JSON.stringify({ type: "pty", term: "cli",  data: ptyBuf.cli  }));
 
     // Send current state on connect
     ws.send(JSON.stringify({
@@ -519,30 +431,10 @@ export function startWebServer(
     ws.send(JSON.stringify(getHistory(cfg)));
     ws.send(JSON.stringify({ type: "skill-state", ...getSkillState(cfg.skillDir) }));
 
-    // Only the cli pane accepts keystrokes / resize / restart from the
-    // dashboard. The "main" pane is a read-only mirror of loopTerm.
     ws.on("message", async (raw: Buffer) => {
       try {
         const m = JSON.parse(raw.toString());
 
-        if (m.type === "input"  && m.term === "cli") {
-          cli.write(m.data);
-        }
-        if (m.type === "resize" && m.term === "cli") {
-          cli.resize(m.cols, m.rows);
-        }
-        if (m.type === "restart-check" && m.term === "cli") {
-          const kids = await cli.getChildren();
-          ws.send(JSON.stringify({
-            type: "restart-check-result",
-            term: m.term,
-            hasChildren: kids.length > 0,
-            childCmds:   kids.map((k) => k.cmd),
-          }));
-        }
-        if (m.type === "restart" && m.term === "cli") {
-          await cli.restart();
-        }
         if (m.type === "config" && typeof m.dryRun === "boolean") {
           runtime.dryRun = m.dryRun;
           console.error(`[web] dryRun = ${runtime.dryRun}`);
