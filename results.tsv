@@ -1,6 +1,6 @@
 # direction=lower
 iter	status	metric	delta	exit	warns	desc	ts
-0	baseline	83081920		0	0	initial	2026-05-12T12:35:06.138Z
-1	discard	89497342	6415422	0	0	regress	2026-05-12T12:42:10.696Z
-2	discard	85373155	2291235	0	0	regress	2026-05-12T12:47:28.384Z
-3	discard	86544961	3463041	0	0	regress	2026-05-12T12:53:53.417Z
+0	baseline	91474535		0	0	initial	2026-05-13T12:03:55.031Z
+1	keep	67974022	-23500513	0	0	keep	2026-05-13T13:39:32.975Z
+2	discard			128	0	apply-fail	2026-05-13T13:41:50.941Z
+3	discard			128	0	apply-fail	2026-05-13T13:44:17.655Z

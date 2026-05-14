@@ -1,0 +1,14 @@
+# Runtime state
+loop.log
+loop.pid
+
+# Editor / AI tool settings
+.claude/
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# Backup files
+*.backup
