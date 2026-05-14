@@ -54,10 +54,18 @@ echo $! > ../loop.pid
 - 关闭:`kill $(cat loop.pid)`。
 
 直接在浏览器里打开 dashboard:`http://localhost:8080/`(server 会回 HTML)。
-右上角 ws-dot 颜色:
-- 绿色 + `已连接` = WebSocket 通,实时推
-- 绿色 + `HTTP 轮询` = WS 被代理拦,自动 fallback 到 `/api/state` 每 2s 拉
-- 黄色 + `demo` = WS 也死、polling 也死,演示数据,你看到的是假的
+右上角 ws-dot 状态(4 种):
+
+| 颜色 | 含义 |
+|---|---|
+| 灰 | 初始/连接中 |
+| 绿 + `已连接` | WebSocket 通,实时推 |
+| 绿 + `HTTP 轮询` | WS 断,fallback 到 `/api/state` 每 2s |
+| 红 + `服务器已断开 — 重连中…` | 服务进程死了(不再误触发 demo 假数据) |
+
+**演示模式**:`http://localhost:8080/?demo=1` 走前端模拟(7 个 stage 假
+序列 + 4 条 mock commits + header 显眼的 DEMO 橙色 pill),用于在没服务器
+的环境检查 UI 渲染。普通访问(无 `?demo=1`)即使 WS 断开也不会触发 demo。
 
 > **代理坑**:Windows / VS Code Simple Browser 通常走系统代理(Clash:7890)。
 > Clash 默认拦 `localhost` 但放行内网 IP。**最稳的入口是 `http://<WSL IP>:8080/`**
@@ -68,6 +76,10 @@ Stage 0 是 `confirm` 状态。**通常情况下不需要手动 `claude login`**
 `~/.claude/.credentials.json` 一旦存在(任何之前的 claude 会话都会留),
 autoresearch 的 PTY 直接继承 `HOME` 拿到。点 ✓ Confirm & Continue 就走
 setupCmds(包括 target_skill `git init` 兜底)然后 baseline。
+
+> **2026-05-14 起 dashboard 删除了 cli 交互面板** — Claude CLI 只需登录
+> 一次,日常运行不再需要 dashboard 嵌入终端。如要重新登录,在启动
+> autoresearch 服务器之前在普通终端跑 `claude login` 即可。
 
 ---
 
@@ -137,6 +149,32 @@ loop.ts 现在每个 stage 都打 begin/end 行。失败时还会打 5 行 stdou
 ```
 
 UI 看不到也能从 `tail -F loop.log | grep -E "iter|stage|FAIL"` 完整复现进度。
+
+### 新增 REST 端点(meta-loop dashboard)
+
+| 路径 | 用途 |
+|---|---|
+| `GET /api/state` | 状态快照(原有) |
+| `GET /api/stage-log?stage=N` | `${workdir}/.ar/stage-N.log` 全文,默认从 head 截断到 1 MB |
+| `GET /api/skill-state` | skillDir 的 MANIFEST.yml 分类 + diff vs champion |
+| `GET /api/skill-diff?path=…` | `git diff champion..HEAD -- <path>`(仅 evolving 文件) |
+| `GET /api/skill-show?ref=champion&path=…` | `git show champion:<path>`(查看获胜版本) |
+
+WebSocket 新事件:
+- `{type:"stage-log-updated", stage:N}` — fs.watch 触发,客户端去 REST 拉
+- `{type:"skill-state", manifest, current, champion, diff}` — 每 2s 推 + 握手
+
+### .ar/ 目录
+
+loop.ts 每次进入一个 stage 都会把 stdout/stderr 写到
+`${workdir}/.ar/stage-N.log`。每个 stage 文件**进入时截断**,
+不跨 iter 累加(跨 iter 历史用 `loop.log` 或 `results.tsv`)。
+
+如果 workdir 是 git 仓库,把 `.ar/` 加到本地 exclude 不污染 status:
+
+```bash
+echo .ar/ >> /home/fxy/angle/.git/info/exclude
+```
 
 ### REST 拉取 — `GET /api/state`
 
