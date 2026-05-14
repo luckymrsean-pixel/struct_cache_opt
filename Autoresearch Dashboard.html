@@ -156,28 +156,27 @@ label.field-lbl { display:block; font-size:10px; color:var(--dim); margin-bottom
 }
 .add-stage-btn:hover { border-color:var(--blue); color:var(--blue); }
 
-/* ── Center — main terminal (top); Task 8 adds Stage Log panel below ──────── */
-#center { display:flex; flex-direction:column; background:#0a0e14; position:relative; overflow:hidden; }
-.term-wrap { position:relative; flex:1; min-height:0; overflow:hidden; }
-.term-label {
-  position:absolute; top:0; left:0; right:0; z-index:10;
-  display:flex; align-items:center; gap:8px;
-  padding:3px 10px; background:rgba(13,17,23,.85);
-  border-bottom:1px solid var(--border); font-size:10px; color:var(--dim);
-  backdrop-filter:blur(4px);
+/* ── Center column: stage log panel ──────────────────────────── */
+#center { display:flex; flex-direction:column; min-width:0; }
+#stage-log-panel { display:flex; flex-direction:column; flex:1; min-height:0; background:var(--panel); }
+.slp-head {
+  display:flex; align-items:center; gap:8px; padding:6px 10px;
+  border-bottom:1px solid var(--border); font-size:11px;
+  color:var(--dim); text-transform:uppercase; letter-spacing:0.5px;
 }
-.term-label .tl-dot { width:6px; height:6px; border-radius:50%; background:var(--border); }
-.term-label .tl-dot.active { background:var(--green); }
-.term-label .tl-dot.dead { background:var(--red); }
-.term-inner { position:absolute; inset:22px 0 0 0; padding:4px; }
-/* term-main is a read-only mirror; let long Stage 1 LLM lines (unified diffs)
-   scroll horizontally instead of wrapping. xterm has no native horizontal
-   scroll — we widen cols via JS and open up the inner viewport's clip. */
-#term-main-wrap .term-inner { overflow-x:auto; overflow-y:hidden; }
-#term-main-wrap .term-inner .xterm,
-#term-main-wrap .term-inner .xterm-viewport,
-#term-main-wrap .term-inner .xterm-screen { overflow:visible !important; }
-#term-main-wrap .term-inner .xterm-viewport { width:auto !important; }
+.slp-title { font-weight:600; color:var(--fg, #c9d1d9); text-transform:none; letter-spacing:0; }
+.slp-sel {
+  background:var(--bg); color:var(--fg, #c9d1d9);
+  border:1px solid var(--border); border-radius:3px;
+  padding:2px 6px; font-size:11px; font-family:inherit;
+}
+.slp-meta { margin-left:auto; font-size:10px; color:var(--dim); text-transform:none; letter-spacing:0; }
+.slp-body {
+  flex:1; min-height:0; margin:0; padding:8px 12px;
+  font-family:'JetBrains Mono','Fira Code',monospace; font-size:12px; line-height:1.45;
+  color:#c9d1d9; background:#0a0e14; overflow:auto;
+  white-space:pre; tab-size:4;
+}
 /* ── Right panel ─────────────────────────── */
 #right { border-left:1px solid var(--border); display:flex; flex-direction:column; overflow:hidden; }
 .r-sec { padding:12px 12px; border-bottom:1px solid var(--border); }
@@ -289,15 +288,25 @@ label.field-lbl { display:block; font-size:10px; color:var(--dim); margin-bottom
 
 </aside>
 
-<!-- Center: main terminal (top); Task 8 will add Stage Log panel below -->
+<!-- Center: stage log panel (Task 8); Task 9 will add skill quadrants above -->
 <div id="center">
-  <div class="term-wrap" id="term-main-wrap">
-    <div class="term-label">
-      <div class="tl-dot active" id="main-dot"></div>
-      <span style="flex:1">Loop — Stage 1 LLM 输出 / 自动化 PTY (read-only)</span>
-    </div>
-    <div class="term-inner" id="term-main"></div>
-  </div>
+  <section id="stage-log-panel">
+    <header class="slp-head">
+      <span class="slp-title">Loop — Stage Logs</span>
+      <select id="slp-stage-sel" class="slp-sel">
+        <option value="follow">📍 follow current</option>
+        <option value="0">Stage 0 — Init</option>
+        <option value="1">Stage 1 — Ideate</option>
+        <option value="2">Stage 2 — Apply</option>
+        <option value="3">Stage 3 — Build</option>
+        <option value="4">Stage 4 — Verify</option>
+        <option value="5">Stage 5 — Decide</option>
+        <option value="6">Stage 6 — Schedule</option>
+      </select>
+      <span class="slp-meta" id="slp-meta">phase: —</span>
+    </header>
+    <pre id="slp-body" class="slp-body"></pre>
+  </section>
 </div>
 
 <!-- Right panel -->
@@ -342,32 +351,6 @@ const TERM_THEME = {
   red:'#f85149', green:'#3fb950', yellow:'#e3b341',
   blue:'#58a6ff', magenta:'#bc8cff', cyan:'#39c5cf', white:'#c9d1d9',
 };
-
-// Fixed wide column count for the Stage-1-mirror pane so long diff lines
-// don't wrap inside xterm. Pair with `#term-main-wrap .term-inner { overflow-x:auto }`.
-const MAIN_WIDE_COLS = 240;
-
-function makeTerm(elId, opts = {}) {
-  const t = new Terminal({ theme:TERM_THEME, fontFamily:"'JetBrains Mono','Fira Code',monospace", fontSize:12, lineHeight:1.45, cursorBlink:true });
-  const fit = new FitAddon.FitAddon();
-  t.loadAddon(fit);
-  t.open(document.getElementById(elId));
-  fit.fit();
-  if (opts.wideCols) t.resize(opts.wideCols, t.rows);
-  return { term:t, fit, wideCols: opts.wideCols || null };
-}
-
-// Refit while preserving a forced wideCols override (FitAddon would otherwise
-// re-derive cols from container width and clobber it).
-function fitTerm(o) {
-  o.fit.fit();
-  if (o.wideCols) o.term.resize(o.wideCols, o.term.rows);
-}
-
-const main = makeTerm('term-main', { wideCols: MAIN_WIDE_COLS });   // read-only mirror of loopTerm
-
-// Resize on window resize
-new ResizeObserver(() => { fitTerm(main); }).observe(document.getElementById('center'));
 
 // ─── Prompt preview ───────────────────────────────────────────────────────────
 
@@ -479,8 +462,7 @@ function removeStage(i) {
 }
 
 function openLog(name) {
-  showToast(`Opening ${name} in terminal`);
-  main.term.write(`\r\n\x1b[90m$ cat ${name}\x1b[0m\r\n`);
+  showToast(`Opening ${name} in stage log panel`);
 }
 
 renderStages();
@@ -645,7 +627,7 @@ function connectWS() {
       } else if (m.type === 'skill-state') {
         // wired in Task 9
       } else if (m.type === 'stage-log-updated') {
-        // wired in Task 8
+        onStageLogUpdated(m.stage);
       } else if (m.type === 'toast') {
         showToast(m.msg);
       }
@@ -675,6 +657,7 @@ function updateStatus(m) {
   }
   // Backwards-compat: legacy single-stage update path.
   if (m.stage != null) setStageStatus(m.stage, m.stageStatus || 'running');
+  updateStageLogFromStatus(m);
 }
 
 function setStageStatus(id, status) {
@@ -699,37 +682,10 @@ const G='\x1b[32m',Y='\x1b[33m',B='\x1b[34m',C='\x1b[36m',R='\x1b[31m',D='\x1b[2
 function startDemo() {
   if (demoRunning) return;
   demoRunning = true;
-  document.getElementById('tb-status').innerHTML = '<span class="pill running">running</span>';
-  document.getElementById('tb-iter').textContent = '1 / 20';
-
-  main.term.write(`${D}[autoresearch] demo mode — simulating pipeline${W}${N}${N}`);
-
-  const seq = [
-    [300,  () => { main.term.write(`${D}── Stage 0: Init & Claude Login ──${W}${N}`); setStageStatus(0,'running'); }],
-    [600,  () => { main.term.write(`${G}✓ Claude authenticated${W}${N}`); setStageStatus(0,'done'); }],
-    [400,  () => { main.term.write(`${N}${D}── Stage 1: Generate Diff ──${W}${N}`); setStageStatus(1,'running'); }],
-    [800,  () => { main.term.write(`${C}Analyzing struct layout...${W}${N}`); }],
-    [700,  () => { main.term.write(`${C}Generating optimization...${W}${N}`); }],
-    [600,  () => { main.term.write(`${G}diff --git a/src/libANGLE/Context.h b/src/libANGLE/Context.h${W}${N}+  alignas(64) ContextState mState;${N}+  __builtin_prefetch(&mState, 0, 3);${N}`); }],
-    [300,  () => { setStageStatus(1,'done'); }],
-    [200,  () => { main.term.write(`${N}${D}── Stage 2: Apply Diff ──${W}${N}`); setStageStatus(2,'running'); }],
-    [300,  () => { main.term.write(`${G}✓ git apply .ar.patch${W}${N}`); setStageStatus(2,'done'); }],
-    [200,  () => { main.term.write(`${N}${D}── Stage 3: Build & Health Test ──${W}${N}`); setStageStatus(3,'running'); }],
-    [1200, () => { main.term.write(`${D}Building... (logs → stage-3.log)${W}${N}`); }],
-    [900,  () => { main.term.write(`${G}✓ Build succeeded${W}${N}`); setStageStatus(3,'done'); }],
-    [200,  () => { main.term.write(`${N}${D}── Stage 4: Benchmark ──${W}${N}`); setStageStatus(4,'running'); }],
-    [1000, () => { main.term.write(`${D}Running perf stat... (logs → stage-4.log)${W}${N}`); }],
-    [700,  () => { main.term.write(`${G}  1,234,567,890${W} cpu-cycles${N}`); setStageStatus(4,'done'); }],
-    [200,  () => { main.term.write(`${N}${D}── Stage 5: Extract Perf & Commit ──${W}${N}`); setStageStatus(5,'running'); }],
-    [400,  () => { main.term.write(`${D}git commit -m "experiment: iter 4  cycles=1234567890"${W}${N}`); }],
-    [300,  () => { main.term.write(`${G}✓ Committed — all stage logs archived${W}${N}`); setStageStatus(5,'done'); }],
-    [200,  () => { main.term.write(`${N}${D}── Stage 6: Auto Search ──${W}${N}`); setStageStatus(6,'running'); }],
-    [400,  () => { main.term.write(`${G}[autoresearch] ✓ keep  metric=1234567890  delta=-415432110${W}${N}`); setStageStatus(6,'done'); document.getElementById('tb-iter').textContent='2 / 20'; }],
-  ];
-
-  let i = 0;
-  function next() { if (i>=seq.length) return; const [d,fn]=seq[i++]; setTimeout(()=>{ fn(); next(); }, d); }
-  next();
+  // Demo body deferred to Task 11 — until then, no-op so the page doesn't crash
+  // when WS reconnects fail and demoRunning gate is hit. Task 11 redirects demo
+  // output to the new Stage Log <pre>.
+  console.warn('[demo] disabled — will be re-enabled in Task 11');
 }
 
 // ─── HTTP polling fallback ────────────────────────────────────────────────────
@@ -739,7 +695,6 @@ function startDemo() {
 // incremental tail to xterm — otherwise we'd re-render the entire buffer
 // every tick and the terminals would scroll uncontrollably.
 let pollTimer = null;
-const ptySeen = { main: 0 };
 async function pollOnce() {
   try {
     const r = await fetch('/api/state', { cache: 'no-store' });
@@ -747,16 +702,6 @@ async function pollOnce() {
     const s = await r.json();
     if (s.status)  updateStatus(s.status);
     if (s.history) renderHistory(s.history);
-    const full = s.pty?.main || '';
-    if (full.length > ptySeen.main) {
-      main.term.write(full.slice(ptySeen.main));
-      ptySeen.main = full.length;
-    } else if (full.length < ptySeen.main) {
-      // ring buffer rotated — replay the whole window
-      main.term.reset();
-      main.term.write(full);
-      ptySeen.main = full.length;
-    }
     document.getElementById('ws-dot').className = 'ws-dot connected';
     document.getElementById('ws-label').textContent = 'HTTP 轮询';
   } catch (_) { /* keep retrying */ }
@@ -770,12 +715,67 @@ function stopPolling() {
   if (!pollTimer) return;
   clearInterval(pollTimer);
   pollTimer = null;
-  ptySeen.main = 0;
+}
+
+// ─── Stage Log panel ──────────────────────────────────────────────────────────
+const slpBody  = document.getElementById('slp-body');
+const slpSel   = document.getElementById('slp-stage-sel');
+const slpMeta  = document.getElementById('slp-meta');
+
+let slpFollow  = true;                       // "follow current" mode
+let slpCurrent = 0;                          // which stage we're currently viewing
+let slpPhaseStage = 0;                       // last known phase → stage map
+
+slpSel.addEventListener('change', () => {
+  if (slpSel.value === 'follow') {
+    slpFollow = true;
+    slpCurrent = slpPhaseStage;
+  } else {
+    slpFollow = false;
+    slpCurrent = Number(slpSel.value);
+  }
+  refetchStageLog();
+});
+
+// Server pushes "stage-log-updated" when fs.watch fires; we re-fetch via REST.
+function onStageLogUpdated(stage) {
+  if (stage === slpCurrent) refetchStageLog();
+}
+
+// Called whenever status arrives — extracts current stage from `phase` string,
+// auto-switches the panel if in follow mode.
+function updateStageLogFromStatus(m) {
+  // phase format from loop.ts: "iter N: stage M (label)"
+  const mat = (m.phase || '').match(/stage (\d+)/);
+  const stage = mat ? Number(mat[1]) : 0;
+  slpPhaseStage = stage;
+  slpMeta.textContent = `iter ${m.iter || '—'} · ${m.phase || '—'}`;
+  if (slpFollow && stage !== slpCurrent) {
+    slpCurrent = stage;
+    refetchStageLog();
+  }
+}
+
+async function refetchStageLog() {
+  try {
+    const r = await fetch(`/api/stage-log?stage=${slpCurrent}`, { cache: 'no-store' });
+    if (r.status === 404) {
+      slpBody.textContent = `(stage-${slpCurrent}.log not yet written)`;
+      return;
+    }
+    const text = await r.text();
+    const wasAtBottom = slpBody.scrollTop + slpBody.clientHeight >= slpBody.scrollHeight - 8;
+    slpBody.textContent = text;
+    if (wasAtBottom) slpBody.scrollTop = slpBody.scrollHeight;
+  } catch (e) {
+    // network died; leave existing content alone
+  }
 }
 
 // Don't auto-fire demo at 1.2s — startPolling() already kicks in on first
 // WS close, so the page never goes dead even when WS is blocked. Demo only
 // fires after 3 reconnect failures (see ws.onclose) AND polling has nothing.
+refetchStageLog();
 connectWS();
 </script>
 </body>
