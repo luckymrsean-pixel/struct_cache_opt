@@ -45,6 +45,9 @@ import { Terminal } from "./terminal";
 import { bestSoFar } from "./logger";
 import { Config } from "./config";
 import { runtime } from "./loop";
+import { watch } from "fs";
+import { stageLogPath } from "./stage_log";
+import { getSkillState, getSkillDiff, getSkillShow } from "./skill_state";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -271,6 +274,32 @@ export function startWebServer(
   const server = http.createServer((req, res) => {
     const url = req.url ?? "/";
 
+    // Per-stage log for the bottom dashboard panel. Reads .ar/stage-N.log
+    // written by loop.ts; caps response at 1 MB.
+    {
+      const m = url.match(/^\/api\/stage-log\?stage=(\d+)/);
+      if (m) {
+        const stage = Number(m[1]);
+        const p     = stageLogPath(cfg.workdir, stage);
+        if (!existsSync(p)) {
+          res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+          res.end(`stage-${stage}.log not yet written`);
+          return;
+        }
+        let body = readFileSync(p, "utf8");
+        const CAP = 1024 * 1024;
+        if (body.length > CAP) {
+          body = `[truncated — last ${CAP} bytes of ${body.length}]\n` + body.slice(-CAP);
+        }
+        res.writeHead(200, {
+          "Content-Type":  "text/plain; charset=utf-8",
+          "Cache-Control": "no-store",
+        });
+        res.end(body);
+        return;
+      }
+    }
+
     // REST polling endpoint — returns everything the dashboard needs in one
     // JSON payload, so the UI can stay live even when the WebSocket Upgrade
     // is blocked (corporate proxy, VS Code Simple Browser, etc.).
@@ -364,6 +393,26 @@ export function startWebServer(
   loopTerm.on("dead", () => {
     broadcast(wss, { type: "dead", term: "main", code: null, signal: null });
   });
+
+  // Watch .ar/stage-*.log for changes; notify clients to re-fetch via REST.
+  for (let i = 0; i <= 6; i++) {
+    const p = stageLogPath(cfg.workdir, i);
+    try {
+      // fs.watch fires even for files that don't yet exist on some platforms;
+      // on Linux it errors with ENOENT. Tolerate by attempting later: re-arm
+      // every 5 s for stages whose log file does not yet exist.
+      const armWatcher = () => {
+        if (!existsSync(p)) {
+          setTimeout(armWatcher, 5000);
+          return;
+        }
+        watch(p, { persistent: false }, () => {
+          broadcast(wss, { type: "stage-log-updated", stage: i });
+        });
+      };
+      armWatcher();
+    } catch (e) { console.error(`[stage-log] watch ${i} failed:`, e); }
+  }
 
   // Mirror everything that goes to process.stderr (loopTerm PTY bytes,
   // console.error lines from loop.ts / web.ts, anything else) into the
