@@ -397,21 +397,25 @@ export function startWebServer(
   // Watch .ar/stage-*.log for changes; notify clients to re-fetch via REST.
   for (let i = 0; i <= 6; i++) {
     const p = stageLogPath(cfg.workdir, i);
-    try {
-      // fs.watch fires even for files that don't yet exist on some platforms;
-      // on Linux it errors with ENOENT. Tolerate by attempting later: re-arm
-      // every 5 s for stages whose log file does not yet exist.
-      const armWatcher = () => {
-        if (!existsSync(p)) {
-          setTimeout(armWatcher, 5000);
-          return;
-        }
+    // fs.watch fires even for files that don't yet exist on some platforms;
+    // on Linux it errors with ENOENT. Tolerate by attempting later: re-arm
+    // every 5 s for stages whose log file does not yet exist OR if watch()
+    // itself throws (e.g. TOCTOU: file vanishes between existsSync and watch).
+    const armWatcher = () => {
+      if (!existsSync(p)) {
+        setTimeout(armWatcher, 5000);
+        return;
+      }
+      try {
         watch(p, { persistent: false }, () => {
           broadcast(wss, { type: "stage-log-updated", stage: i });
         });
-      };
-      armWatcher();
-    } catch (e) { console.error(`[stage-log] watch ${i} failed:`, e); }
+      } catch (e) {
+        console.error(`[stage-log] watch ${i} failed:`, e);
+        setTimeout(armWatcher, 5000);
+      }
+    };
+    armWatcher();
   }
 
   // Mirror everything that goes to process.stderr (loopTerm PTY bytes,
