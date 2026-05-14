@@ -156,10 +156,9 @@ label.field-lbl { display:block; font-size:10px; color:var(--dim); margin-bottom
 }
 .add-stage-btn:hover { border-color:var(--blue); color:var(--blue); }
 
-/* ── Center — dual terminals (loop mirror on top, cli below) ─────────────── */
+/* ── Center — main terminal (top); Task 8 adds Stage Log panel below ──────── */
 #center { display:flex; flex-direction:column; background:#0a0e14; position:relative; overflow:hidden; }
 .term-wrap { position:relative; flex:1; min-height:0; overflow:hidden; }
-.term-wrap#term-cli-wrap { flex:0 0 38%; border-top:1px solid var(--border); }
 .term-label {
   position:absolute; top:0; left:0; right:0; z-index:10;
   display:flex; align-items:center; gap:8px;
@@ -179,20 +178,6 @@ label.field-lbl { display:block; font-size:10px; color:var(--dim); margin-bottom
 #term-main-wrap .term-inner .xterm-viewport,
 #term-main-wrap .term-inner .xterm-screen { overflow:visible !important; }
 #term-main-wrap .term-inner .xterm-viewport { width:auto !important; }
-.restart-btn {
-  background: transparent; border: 1px solid rgba(255,255,255,0.15);
-  color: var(--dim); padding: 0 6px; border-radius: 3px; cursor: pointer;
-  font-size: 12px; line-height: 14px;
-}
-.restart-btn:hover { color: var(--blue); border-color: var(--blue); }
-
-/* Divider handle */
-#divider {
-  height:4px; background:var(--border); cursor:row-resize; flex-shrink:0;
-  transition:background .15s;
-}
-#divider:hover { background:var(--blue); }
-
 /* ── Right panel ─────────────────────────── */
 #right { border-left:1px solid var(--border); display:flex; flex-direction:column; overflow:hidden; }
 .r-sec { padding:12px 12px; border-bottom:1px solid var(--border); }
@@ -304,9 +289,7 @@ label.field-lbl { display:block; font-size:10px; color:var(--dim); margin-bottom
 
 </aside>
 
-<!-- Center: dual terminals
-     - top "main" pane = read-only mirror of loopTerm (Stage 1 LLM + automation)
-     - bottom "cli" pane = interactive shell for the operator (claude login, …) -->
+<!-- Center: main terminal (top); Task 8 will add Stage Log panel below -->
 <div id="center">
   <div class="term-wrap" id="term-main-wrap">
     <div class="term-label">
@@ -314,15 +297,6 @@ label.field-lbl { display:block; font-size:10px; color:var(--dim); margin-bottom
       <span style="flex:1">Loop — Stage 1 LLM 输出 / 自动化 PTY (read-only)</span>
     </div>
     <div class="term-inner" id="term-main"></div>
-  </div>
-  <div id="divider"></div>
-  <div class="term-wrap" id="term-cli-wrap">
-    <div class="term-label">
-      <div class="tl-dot active" id="cli-dot"></div>
-      <span style="flex:1">CLI — 手动登录 / 调试 (claude login, copilot, …)</span>
-      <button class="restart-btn" onclick="requestRestart('cli')" title="Restart cli bash">↻</button>
-    </div>
-    <div class="term-inner" id="term-cli"></div>
   </div>
 </div>
 
@@ -391,45 +365,9 @@ function fitTerm(o) {
 }
 
 const main = makeTerm('term-main', { wideCols: MAIN_WIDE_COLS });   // read-only mirror of loopTerm
-const cli  = makeTerm('term-cli');                                  // interactive shell
-cli.term.focus();
 
-// Wire cli terminal: forward keystrokes and resize to server (term:"cli").
-cli.term.onData(d => {
-  if (ws?.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type:'input', term:'cli', data:d }));
-  } else {
-    // Demo / disconnected fallback: local echo so the terminal looks responsive.
-    if (d === '\r') cli.term.write('\r\n');
-    else if (d === '\x7f') cli.term.write('\b \b');
-    else cli.term.write(d);
-  }
-});
-cli.term.onResize(({cols,rows}) => {
-  if (ws?.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type:'resize', term:'cli', cols, rows }));
-  }
-});
-
-// Resize both on window resize
-new ResizeObserver(() => { fitTerm(main); fitTerm(cli); }).observe(document.getElementById('center'));
-
-// ─── Divider drag to resize ───────────────────────────────────────────────────
-
-const divider   = document.getElementById('divider');
-const cliWrap   = document.getElementById('term-cli-wrap');
-const centerEl  = document.getElementById('center');
-let dragging    = false;
-
-divider.addEventListener('mousedown', e => { dragging = true; e.preventDefault(); });
-document.addEventListener('mousemove', e => {
-  if (!dragging) return;
-  const rect = centerEl.getBoundingClientRect();
-  const pct  = Math.max(20, Math.min(70, (1 - (e.clientY - rect.top) / rect.height) * 100));
-  cliWrap.style.flex = `0 0 ${pct}%`;
-  fitTerm(main); fitTerm(cli);
-});
-document.addEventListener('mouseup', () => { dragging = false; });
+// Resize on window resize
+new ResizeObserver(() => { fitTerm(main); }).observe(document.getElementById('center'));
 
 // ─── Prompt preview ───────────────────────────────────────────────────────────
 
@@ -671,40 +609,6 @@ let ws = null;
 // loopTerm runs at fixed cols=220 inside the loop process, so we don't push
 // resize either; xterm's local fit is purely cosmetic.
 
-function showDeadBanner(term, info) {
-  const xterm = (term === 'cli' ? cli : main).term;
-  const code   = info?.code   ?? '?';
-  const signal = info?.signal ? ` (signal ${info.signal})` : '';
-  // Red ANSI message inside the terminal itself.
-  xterm.write(`\r\n\x1b[1;31m── ${term} terminal exited (code ${code}${signal}) — click ↻ to restart ──\x1b[0m\r\n`);
-  const dot = document.getElementById(`${term}-dot`);
-  if (dot) { dot.classList.remove('active'); dot.classList.add('dead'); }
-}
-
-function hideDeadBanner(term) {
-  const dot = document.getElementById(`${term}-dot`);
-  if (dot) { dot.classList.remove('dead'); dot.classList.add('active'); }
-}
-
-function requestRestart(term) {
-  if (!ws || ws.readyState !== WebSocket.OPEN) {
-    showToast(`Cannot restart ${term}: WS disconnected`);
-    return;
-  }
-  ws.send(JSON.stringify({ type:'restart-check', term }));
-}
-
-function handleRestartCheck(m) {
-  if (!m.hasChildren) {
-    ws.send(JSON.stringify({ type:'restart', term: m.term }));
-    return;
-  }
-  const cmds = (m.childCmds || []).filter(Boolean).join(', ') || '(unknown)';
-  if (confirm(`正在运行: ${cmds}\n确认重启 ${m.term} 终端?`)) {
-    ws.send(JSON.stringify({ type:'restart', term: m.term }));
-  }
-}
-
 let wsReconnectAttempt = 0;
 const WS_DELAYS = [1000, 2000, 5000, 10000, 30000]; // cap at 30s
 
@@ -734,21 +638,14 @@ function connectWS() {
     ws.onerror = () => { /* onclose will handle reconnect */ };
     ws.onmessage = e => {
       const m = JSON.parse(e.data);
-      if (m.type === 'pty') {
-        (m.term === 'cli' ? cli : main).term.write(m.data);
-      } else if (m.type === 'dead') {
-        showDeadBanner(m.term, m);
-      } else if (m.type === 'restarted') {
-        (m.term === 'cli' ? cli : main).term.reset();
-        hideDeadBanner(m.term);
-      } else if (m.type === 'restart-failed') {
-        showToast(`Restart failed (${m.term}): ${m.reason}`);
-      } else if (m.type === 'restart-check-result') {
-        handleRestartCheck(m);
-      } else if (m.type === 'status') {
+      if (m.type === 'status') {
         updateStatus(m);
       } else if (m.type === 'history') {
         renderHistory(m);
+      } else if (m.type === 'skill-state') {
+        // wired in Task 9
+      } else if (m.type === 'stage-log-updated') {
+        // wired in Task 8
       } else if (m.type === 'toast') {
         showToast(m.msg);
       }
@@ -806,17 +703,15 @@ function startDemo() {
   document.getElementById('tb-iter').textContent = '1 / 20';
 
   main.term.write(`${D}[autoresearch] demo mode — simulating pipeline${W}${N}${N}`);
-  cli.term.write(`${D}GitHub Copilot CLI${W}${N}`);
 
   const seq = [
-    [300,  () => { main.term.write(`${D}── Stage 0: Init & Copilot Login ──${W}${N}`); setStageStatus(0,'running'); }],
-    [600,  () => { main.term.write(`${G}✓ Copilot CLI authenticated${W}${N}`); setStageStatus(0,'done'); }],
-    [400,  () => { main.term.write(`${N}${D}── Stage 1: Generate Diff ──${W}${N}`); setStageStatus(1,'running'); document.getElementById('cli-dot').classList.add('active'); }],
-    [200,  () => { cli.term.write(`${D}$ gh copilot suggest -t shell${W}${N}`); }],
-    [800,  () => { cli.term.write(`${C}Analyzing ANGLE rendering pipeline...${W}${N}`); }],
-    [700,  () => { cli.term.write(`${C}Generating struct layout optimization...${W}${N}`); }],
-    [600,  () => { cli.term.write(`${G}diff --git a/src/libANGLE/Context.h b/src/libANGLE/Context.h${W}${N}+  alignas(64) ContextState mState;${N}+  __builtin_prefetch(&mState, 0, 3);${N}`); }],
-    [300,  () => { setStageStatus(1,'done'); document.getElementById('cli-dot').classList.remove('active'); }],
+    [300,  () => { main.term.write(`${D}── Stage 0: Init & Claude Login ──${W}${N}`); setStageStatus(0,'running'); }],
+    [600,  () => { main.term.write(`${G}✓ Claude authenticated${W}${N}`); setStageStatus(0,'done'); }],
+    [400,  () => { main.term.write(`${N}${D}── Stage 1: Generate Diff ──${W}${N}`); setStageStatus(1,'running'); }],
+    [800,  () => { main.term.write(`${C}Analyzing struct layout...${W}${N}`); }],
+    [700,  () => { main.term.write(`${C}Generating optimization...${W}${N}`); }],
+    [600,  () => { main.term.write(`${G}diff --git a/src/libANGLE/Context.h b/src/libANGLE/Context.h${W}${N}+  alignas(64) ContextState mState;${N}+  __builtin_prefetch(&mState, 0, 3);${N}`); }],
+    [300,  () => { setStageStatus(1,'done'); }],
     [200,  () => { main.term.write(`${N}${D}── Stage 2: Apply Diff ──${W}${N}`); setStageStatus(2,'running'); }],
     [300,  () => { main.term.write(`${G}✓ git apply .ar.patch${W}${N}`); setStageStatus(2,'done'); }],
     [200,  () => { main.term.write(`${N}${D}── Stage 3: Build & Health Test ──${W}${N}`); setStageStatus(3,'running'); }],
@@ -844,7 +739,7 @@ function startDemo() {
 // incremental tail to xterm — otherwise we'd re-render the entire buffer
 // every tick and the terminals would scroll uncontrollably.
 let pollTimer = null;
-const ptySeen = { main: 0, cli: 0 };
+const ptySeen = { main: 0 };
 async function pollOnce() {
   try {
     const r = await fetch('/api/state', { cache: 'no-store' });
@@ -852,18 +747,15 @@ async function pollOnce() {
     const s = await r.json();
     if (s.status)  updateStatus(s.status);
     if (s.history) renderHistory(s.history);
-    for (const term of ['main','cli']) {
-      const full = s.pty?.[term] || '';
-      const xterm = (term === 'cli' ? cli : main).term;
-      if (full.length > ptySeen[term]) {
-        xterm.write(full.slice(ptySeen[term]));
-        ptySeen[term] = full.length;
-      } else if (full.length < ptySeen[term]) {
-        // ring buffer rotated — replay the whole window
-        xterm.reset();
-        xterm.write(full);
-        ptySeen[term] = full.length;
-      }
+    const full = s.pty?.main || '';
+    if (full.length > ptySeen.main) {
+      main.term.write(full.slice(ptySeen.main));
+      ptySeen.main = full.length;
+    } else if (full.length < ptySeen.main) {
+      // ring buffer rotated — replay the whole window
+      main.term.reset();
+      main.term.write(full);
+      ptySeen.main = full.length;
     }
     document.getElementById('ws-dot').className = 'ws-dot connected';
     document.getElementById('ws-label').textContent = 'HTTP 轮询';
@@ -878,7 +770,7 @@ function stopPolling() {
   if (!pollTimer) return;
   clearInterval(pollTimer);
   pollTimer = null;
-  ptySeen.main = 0; ptySeen.cli = 0;
+  ptySeen.main = 0;
 }
 
 // Don't auto-fire demo at 1.2s — startPolling() already kicks in on first
