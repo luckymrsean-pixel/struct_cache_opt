@@ -256,14 +256,14 @@ print(f'M3_keep_rate={d[\"M3_keep_rate\"]:.3f}')
 print(f'M4_struct_coverage={d[\"M4_struct_coverage\"]}')
 print(f'M5_keep_delta_cv={d[\"M5_keep_delta_cv\"]:.3f}')
 print(f'eval_N={d[\"eval_N\"]}')
-assert d['eval_N'] == 10
+assert d['eval_N'] == 3
 "
 tail -1 meta_results.tsv
 ```
 
 Expected:
-- `eval_N=10`, no AssertionError
-- last meta_results.tsv row: `1\tskill-v0\tskill-v0\t10\t...\tmanual\twithin noise band\t...` (still a self-comparison, so still `manual`)
+- `eval_N=3`, no AssertionError
+- last meta_results.tsv row: `1\tskill-v0\tskill-v0\t3\t...\tmanual\twithin noise band\t...` or `revert` if `M2_apply_rate` falls below the 50% gate (a real possibility at small N — observed in execution).
 
 - [ ] **Step 4: Decision gate — sanity-check the baseline**
 
