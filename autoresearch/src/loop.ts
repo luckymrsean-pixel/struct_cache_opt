@@ -2,6 +2,7 @@ import { Terminal, CmdResult } from "./terminal";
 import { ensure, append, tail, bestSoFar, Row } from "./logger";
 import { Config } from "./config";
 import { loopState, setStage, resetIterStages } from "./web";
+import { writeStageLogHead, writeStageLogTail } from "./stage_log";
 
 // ─── Runtime + dashboard controller ───────────────────────────────────────────
 //
@@ -81,6 +82,28 @@ function makeRow(
     desc:   finalDesc,
     ts:     new Date().toISOString(),
   };
+}
+
+/**
+ * Run `cmd` through the terminal AND mirror stdout/stderr to
+ * `${workdir}/.ar/stage-<stage>.log`. Truncate on entry, append result + footer
+ * on exit. Errors in the log writer are swallowed (logged to stderr) so they
+ * never fail the loop.
+ */
+async function runWithStageLog(
+  term:    Terminal,
+  workdir: string,
+  stage:   number,
+  iter:    number,
+  cmd:     string,
+  timeoutMs?: number,
+): Promise<CmdResult> {
+  try { await writeStageLogHead(workdir, stage, iter, cmd); }
+  catch (e) { console.error(`[stage-log] head ${stage} failed:`, e); }
+  const r = await term.run(cmd, timeoutMs);
+  try { await writeStageLogTail(workdir, stage, r); }
+  catch (e) { console.error(`[stage-log] tail ${stage} failed:`, e); }
+  return r;
 }
 
 async function runOrDie(
@@ -211,9 +234,24 @@ async function runSession(cfg: Config, term: Terminal): Promise<void> {
   // Manual auth (e.g. `claude login`) is the operator's job in the dashboard
   // terminal BEFORE clicking Start; setupCmds run AFTER Start.
   setStage(0, "running");
+  // Stage 0 is a sequence of setupCmds; emit one combined log so the dashboard
+  // can show all setup output. The file is truncated on entry and rewritten in
+  // place per setup batch, which matches Stage 0's "runs once per session" role.
+  try { await writeStageLogHead(cfg.workdir, 0, 0, `setupCmds (${cfg.setupCmds?.length ?? 0})`); }
+  catch (e) { console.error(`[stage-log] head 0 failed:`, e); }
   for (const cmd of cfg.setupCmds ?? []) {
     console.error(`[autoresearch] setup: ${cmd}`);
-    await runOrDie(term, cmd);
+    const r = await term.run(cmd);
+    try { await writeStageLogTail(cfg.workdir, 0, {
+      stdout: `$ ${cmd}\n${r.stdout}`,
+      stderr: r.stderr,
+      exitCode: r.exitCode,
+      durationMs: r.durationMs,
+    }); }
+    catch (e) { console.error(`[stage-log] tail 0 failed:`, e); }
+    if (r.exitCode !== 0) {
+      throw new Error(`runOrDie: exit ${r.exitCode}\ncmd: ${cmd}\nstderr: ${r.stderr}`);
+    }
   }
   setStage(0, "done");
 
@@ -280,7 +318,8 @@ async function runSession(cfg: Config, term: Terminal): Promise<void> {
     loopState.phase = `iter ${n}: stage 1 (ideate)`;
     setStage(1, "running");
     console.error(`[iter ${n}] stage 1: ideate (${ideateCmd})`);
-    const ideate = await term.run(
+    const ideate = await runWithStageLog(
+      term, cfg.workdir, 1, n,
       `${ideateCmd} <<'${heredocTag}'\n${ctxBody}\n${heredocTag}`,
       20 * 60_000,
     );
@@ -308,7 +347,8 @@ async function runSession(cfg: Config, term: Terminal): Promise<void> {
     setStage(2, "running");
     console.error(`[iter ${n}] stage 2: git apply (${ideate.stdout.length}B patch)`);
     const patchTag = `AR_EOF_${rand()}`;
-    const apply = await term.run(
+    const apply = await runWithStageLog(
+      term, cfg.workdir, 2, n,
       `cat > .ar.patch <<'${patchTag}'\n${ideate.stdout}\n${patchTag}\n` +
       `git apply --check .ar.patch && git apply .ar.patch`,
     );
@@ -355,7 +395,7 @@ async function runSession(cfg: Config, term: Terminal): Promise<void> {
     loopState.phase = `iter ${n}: stage 3 (build)`;
     setStage(3, "running");
     console.error(`[iter ${n}] stage 3: guardCmd (build)`);
-    const guard = await term.run(cfg.guardCmd, 20 * 60_000);
+    const guard = await runWithStageLog(term, cfg.workdir, 3, n, cfg.guardCmd, 20 * 60_000);
     console.error(`[iter ${n}] stage 3: build exit=${guard.exitCode} (${guard.durationMs}ms)`);
     if (guard.exitCode !== 0) {
       setStage(3, "error");
@@ -371,7 +411,7 @@ async function runSession(cfg: Config, term: Terminal): Promise<void> {
     loopState.phase = `iter ${n}: stage 4 (verify)`;
     setStage(4, "running");
     console.error(`[iter ${n}] stage 4: verifyCmd (metric)`);
-    const v      = await term.run(cfg.verifyCmd, 30 * 60_000);
+    const v      = await runWithStageLog(term, cfg.workdir, 4, n, cfg.verifyCmd, 30 * 60_000);
     const metric = parseMetric(v);
     console.error(
       `[iter ${n}] stage 4: verify exit=${v.exitCode} metric=${metric} ` +
@@ -407,6 +447,7 @@ async function runSession(cfg: Config, term: Terminal): Promise<void> {
       continue;
     }
 
+    let decisionStdout = "";
     if (better) {
       const delta = metric - best!;
       best        = metric;
@@ -414,13 +455,29 @@ async function runSession(cfg: Config, term: Terminal): Promise<void> {
       console.error(`[autoresearch] ✓ keep  metric=${metric}  delta=${delta}`);
       append(cfg.tsvPath, makeRow(n, "keep", metric, delta, v, "keep"));
       setStage(5, "done");
+      decisionStdout = `decision: keep\nmetric: ${metric}\ndelta: ${delta}\nbest: ${best}\n`;
     } else {
       await term.run("git revert --no-edit HEAD");
       sinceBest++;
       console.error(`[autoresearch] ✗ discard  metric=${metric}  best=${best}`);
       append(cfg.tsvPath, makeRow(n, "discard", metric, metric - best!, v, "regress"));
       setStage(5, "done");
+      decisionStdout = `decision: discard (regressed)\nmetric: ${metric}\nbest: ${best}\nreverted: HEAD\n`;
     }
+    // Synthesize stage-5 and stage-6 logs so the dashboard's bottom panel
+    // has something to show when the operator selects these stages.
+    try {
+      await writeStageLogHead(cfg.workdir, 5, n, "decide (keep|discard)");
+      await writeStageLogTail(cfg.workdir, 5, {
+        stdout: decisionStdout, stderr: "", exitCode: 0, durationMs: 0,
+      });
+      await writeStageLogHead(cfg.workdir, 6, n, "schedule next");
+      await writeStageLogTail(cfg.workdir, 6, {
+        stdout: `iter ${n} complete. sinceBest=${sinceBest}/${cfg.plateauPatience}\n` +
+                `next iter: ${n + 1 <= iters ? n + 1 : "(end of run)"}\n`,
+        stderr: "", exitCode: 0, durationMs: 0,
+      });
+    } catch (e) { console.error(`[stage-log] decide/schedule failed:`, e); }
     setStage(6, "done");
 
     if (sinceBest >= cfg.plateauPatience) {
