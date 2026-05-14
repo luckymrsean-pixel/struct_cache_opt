@@ -816,6 +816,13 @@ async function pollOnce() {
     document.getElementById('ws-dot').className = 'ws-dot connected';
     document.getElementById('ws-label').textContent = 'HTTP 轮询';
   } catch (_) { /* keep retrying */ }
+  // Refresh skill quadrants separately — /api/state doesn't carry skill-state.
+  // Without this, proxy-blocked clients (no WS upgrade) see stale quadrants
+  // after page load.
+  fetch('/api/skill-state', { cache: 'no-store' })
+    .then(r => r.ok ? r.json() : null)
+    .then(s => { if (s) renderSkillState(s); })
+    .catch(() => {});
 }
 function startPolling() {
   if (pollTimer) return;
