@@ -159,6 +159,72 @@ label.field-lbl { display:block; font-size:10px; color:var(--dim); margin-bottom
 /* ── Center column: stage log panel ──────────────────────────── */
 #center { display:flex; flex-direction:column; min-width:0; }
 #stage-log-panel { display:flex; flex-direction:column; flex:1; min-height:0; background:var(--panel); }
+
+/* ── Center column: skill quadrants ──────────────────────────── */
+#skill-quadrants {
+  flex: 0 0 50%; min-height:0;
+  display:grid; grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr;
+  gap:1px; background:var(--border);
+}
+#q-evolving-unchanged { grid-area: 1 / 1; }
+#q-evolving-changed   { grid-area: 1 / 2; }
+#q-frozen             { grid-area: 2 / 1; }
+#q-winner             { grid-area: 2 / 2; }
+.quad { background:var(--panel); display:flex; flex-direction:column; min-height:0; }
+.quad-title {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:6px 10px; border-bottom:1px solid var(--border);
+  font-size:10px; text-transform:uppercase; letter-spacing:1px; color:var(--dim);
+  position:sticky; top:0; background:var(--panel); z-index:1;
+}
+.quad-count { font-weight:600; color:#c9d1d9; }
+#q-evolving-changed .quad-title { color: var(--orange, #e3b341); }
+#q-winner            .quad-title { color: var(--green,  #3fb950); }
+.quad-list {
+  flex:1; min-height:0; overflow-y:auto;
+  margin:0; padding:0; list-style:none;
+}
+.quad-list li {
+  display:flex; align-items:center; gap:6px;
+  padding:4px 10px; font-size:11px;
+  font-family:'JetBrains Mono','Fira Code',monospace;
+  border-bottom:1px solid rgba(255,255,255,0.03);
+  color:#c9d1d9;
+}
+.quad-list li.clickable { cursor:pointer; }
+.quad-list li.clickable:hover { background:rgba(88,166,255,0.08); }
+.quad-list .qf-path { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.quad-list .qf-add { color:#3fb950; font-size:10px; }
+.quad-list .qf-del { color:#f85149; font-size:10px; }
+
+/* divider between quadrants and stage log */
+#center-divider {
+  flex:0 0 4px; cursor:row-resize; background:var(--border);
+}
+#center-divider:hover { background:var(--blue, #58a6ff); }
+
+/* ── Quadrant modal ─────────────────────────────────────────── */
+#quad-modal { position:fixed; inset:0; z-index:100; display:none; }
+#quad-modal .qm-backdrop { position:absolute; inset:0; background:rgba(0,0,0,0.6); }
+#quad-modal .qm-box {
+  position:absolute; left:10%; top:8%; right:10%; bottom:8%;
+  background:var(--panel); border:1px solid var(--border); border-radius:4px;
+  display:flex; flex-direction:column; min-height:0;
+}
+#quad-modal .qm-head {
+  display:flex; align-items:center; padding:8px 12px;
+  border-bottom:1px solid var(--border); font-size:12px;
+}
+#quad-modal .qm-title { flex:1; color:#c9d1d9; font-family:monospace; }
+#quad-modal .qm-close {
+  background:none; border:1px solid var(--border); color:var(--dim);
+  cursor:pointer; padding:2px 8px; border-radius:3px;
+}
+#quad-modal .qm-body {
+  flex:1; min-height:0; margin:0; padding:12px;
+  font-family:'JetBrains Mono','Fira Code',monospace; font-size:11px; line-height:1.5;
+  color:#c9d1d9; background:#0a0e14; overflow:auto; white-space:pre;
+}
 .slp-head {
   display:flex; align-items:center; gap:8px; padding:6px 10px;
   border-bottom:1px solid var(--border); font-size:11px;
@@ -288,8 +354,27 @@ label.field-lbl { display:block; font-size:10px; color:var(--dim); margin-bottom
 
 </aside>
 
-<!-- Center: stage log panel (Task 8); Task 9 will add skill quadrants above -->
+<!-- Center: skill quadrants (top) + divider + stage log panel (bottom) -->
 <div id="center">
+  <section id="skill-quadrants">
+    <div class="quad" id="q-evolving-unchanged">
+      <div class="quad-title"><span>evolving · unchanged</span><span class="quad-count" id="qc-eu">0</span></div>
+      <ul class="quad-list" id="ql-eu"></ul>
+    </div>
+    <div class="quad" id="q-evolving-changed">
+      <div class="quad-title"><span>evolving · CHANGED</span><span class="quad-count" id="qc-ec">0</span></div>
+      <ul class="quad-list" id="ql-ec"></ul>
+    </div>
+    <div class="quad" id="q-frozen">
+      <div class="quad-title"><span>frozen</span><span class="quad-count" id="qc-fz">0</span></div>
+      <ul class="quad-list" id="ql-fz"></ul>
+    </div>
+    <div class="quad" id="q-winner">
+      <div class="quad-title"><span>evolving · WINNER</span><span class="quad-count" id="qc-wn">0</span></div>
+      <ul class="quad-list" id="ql-wn"></ul>
+    </div>
+  </section>
+  <div id="center-divider"></div>
   <section id="stage-log-panel">
     <header class="slp-head">
       <span class="slp-title">Loop — Stage Logs</span>
@@ -625,7 +710,7 @@ function connectWS() {
       } else if (m.type === 'history') {
         renderHistory(m);
       } else if (m.type === 'skill-state') {
-        // wired in Task 9
+        renderSkillState(m);
       } else if (m.type === 'stage-log-updated') {
         onStageLogUpdated(m.stage);
       } else if (m.type === 'toast') {
@@ -772,10 +857,101 @@ async function refetchStageLog() {
   }
 }
 
+// ─── Skill Quadrants ──────────────────────────────────────────────────────────
+function renderSkillState(s) {
+  const frozen     = s.manifest?.frozen   ?? [];
+  const evolving   = s.manifest?.evolving ?? [];
+  const diff       = s.diff ?? [];
+  const diffSet    = new Map(diff.map(d => [d.path, d]));
+  const changed    = evolving.filter(p =>  diffSet.has(p));
+  const unchanged  = evolving.filter(p => !diffSet.has(p));
+
+  // Helpers
+  const fileLi = (path, opts = {}) => {
+    const d = opts.diffEntry;
+    const stats = d ? `<span class="qf-add">+${d.added}</span><span class="qf-del">-${d.removed}</span>` : '';
+    const cls = opts.clickable ? 'clickable' : '';
+    return `<li class="${cls}" data-path="${esc(path)}" data-action="${esc(opts.action || '')}">
+      <span class="qf-path" title="${esc(path)}">${esc(path)}</span>${stats}
+    </li>`;
+  };
+
+  document.getElementById('ql-fz').innerHTML = frozen.map(p => fileLi(p)).join('');
+  document.getElementById('ql-eu').innerHTML = unchanged.map(p => fileLi(p, { clickable:true, action:'show-champion' })).join('');
+  document.getElementById('ql-ec').innerHTML = changed.map(p => fileLi(p, { clickable:true, action:'show-diff', diffEntry: diffSet.get(p) })).join('');
+  document.getElementById('ql-wn').innerHTML = evolving.map(p => fileLi(p, { clickable:true, action:'show-champion' })).join('');
+
+  document.getElementById('qc-fz').textContent = frozen.length;
+  document.getElementById('qc-eu').textContent = unchanged.length;
+  document.getElementById('qc-ec').textContent = changed.length;
+  document.getElementById('qc-wn').textContent = evolving.length;
+}
+
+// Delegated click handler for quadrant file rows
+document.getElementById('skill-quadrants').addEventListener('click', async (e) => {
+  const li = e.target.closest('li.clickable');
+  if (!li) return;
+  const path   = li.dataset.path;
+  const action = li.dataset.action;
+  let title, body;
+  if (action === 'show-diff') {
+    title = `diff: ${path}  (champion..HEAD)`;
+    const r = await fetch(`/api/skill-diff?path=${encodeURIComponent(path)}`);
+    body = await r.text();
+  } else if (action === 'show-champion') {
+    title = `${path}  @ champion`;
+    const r = await fetch(`/api/skill-show?ref=champion&path=${encodeURIComponent(path)}`);
+    body = await r.text();
+  } else { return; }
+  openModal(title, body);
+});
+
+function openModal(title, body) {
+  let modal = document.getElementById('quad-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'quad-modal';
+    modal.innerHTML = `
+      <div class="qm-backdrop" onclick="closeModal()"></div>
+      <div class="qm-box">
+        <header class="qm-head">
+          <span class="qm-title" id="qm-title"></span>
+          <button class="qm-close" onclick="closeModal()">✕</button>
+        </header>
+        <pre class="qm-body" id="qm-body"></pre>
+      </div>`;
+    document.body.appendChild(modal);
+  }
+  document.getElementById('qm-title').textContent = title;
+  document.getElementById('qm-body').textContent  = body || '(empty)';
+  modal.style.display = 'block';
+}
+function closeModal() {
+  const m = document.getElementById('quad-modal');
+  if (m) m.style.display = 'none';
+}
+
+// ─── Center divider drag (quadrants ↔ stage log) ──────────────────────────────
+{
+  const div   = document.getElementById('center-divider');
+  const quad  = document.getElementById('skill-quadrants');
+  const ctr   = document.getElementById('center');
+  let drag = false;
+  div.addEventListener('mousedown', (e) => { drag = true; e.preventDefault(); });
+  document.addEventListener('mousemove', (e) => {
+    if (!drag) return;
+    const r = ctr.getBoundingClientRect();
+    const pct = Math.max(20, Math.min(80, (e.clientY - r.top) / r.height * 100));
+    quad.style.flex = `0 0 ${pct}%`;
+  });
+  document.addEventListener('mouseup', () => { drag = false; });
+}
+
 // Don't auto-fire demo at 1.2s — startPolling() already kicks in on first
 // WS close, so the page never goes dead even when WS is blocked. Demo only
 // fires after 3 reconnect failures (see ws.onclose) AND polling has nothing.
 refetchStageLog();
+fetch('/api/skill-state').then(r => r.json()).then(renderSkillState).catch(() => {});
 connectWS();
 </script>
 </body>
