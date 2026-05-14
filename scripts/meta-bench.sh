@@ -56,9 +56,13 @@ fi
 CHAMPION_RUN_DIR="$CACHE_ROOT/meta-runs/$CHAMPION_TAG"
 
 if [ ! -f "$CHAMPION_RUN_DIR/result.json" ]; then
-  echo "ERROR: champion result missing: $CHAMPION_RUN_DIR/result.json" >&2
-  echo "Seed it by running this script with --skill-tag $CHAMPION_TAG first." >&2
-  exit 2
+  if [ "$RESOLVED_TAG" = "$CHAMPION_TAG" ]; then
+    echo "[meta-bench] bootstrapping champion baseline (no prior result.json)" >&2
+  else
+    echo "ERROR: champion result missing: $CHAMPION_RUN_DIR/result.json" >&2
+    echo "Seed it by running this script with --skill-tag $CHAMPION_TAG first." >&2
+    exit 2
+  fi
 fi
 
 # Compute next meta_iter index (count of non-comment lines in meta_results.tsv - 1 header)
