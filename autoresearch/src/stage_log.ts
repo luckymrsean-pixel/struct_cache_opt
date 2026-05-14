@@ -30,7 +30,7 @@ export async function writeStageLogHead(
   await writeFile(path, head, "utf8");
 }
 
-interface StageResult {
+export interface StageResult {
   stdout:     string;
   stderr:     string;
   exitCode:   number;
@@ -43,6 +43,7 @@ export async function writeStageLogTail(
   r:       StageResult,
 ): Promise<void> {
   const path = stageLogPath(workdir, stage);
+  await mkdir(dirname(path), { recursive: true });
   const body = stripAnsi(r.stdout) + stripAnsi(r.stderr);
   const tail =
     `# exit=${r.exitCode}  duration=${r.durationMs}ms  end  ${new Date().toISOString()}\n`;
