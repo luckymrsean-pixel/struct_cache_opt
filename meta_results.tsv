@@ -1,2 +1,5 @@
 # direction=multi  primary=M1  baseline_tag=meta-baseline
 meta_iter	skill_tag	parent_tag	eval_N	M1_total_drop	M2_apply_rate	M3_keep_rate	M4_struct_cov	M5_cv	decision	reason	ts	run_dir
+0	skill-v0	skill-v0	2	0	50%	0%	0	n/a	manual	within noise band	2026-05-14T11:20:06Z	meta-runs/skill-v0
+1	skill-v0	skill-v0	3	0	33%	0%	0	n/a	revert	apply_rate 33% below gate 50%	2026-05-14T11:47:23Z	meta-runs/skill-v0
+2	skill-v2	skill-v0	3	13244864	67%	67%	0	0.732	advance	M1 +0.0% over champion	2026-05-14T12:14:05Z	meta-runs/skill-v2
