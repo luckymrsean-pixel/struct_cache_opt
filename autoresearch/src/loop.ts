@@ -235,8 +235,8 @@ async function runSession(cfg: Config, term: Terminal): Promise<void> {
   // terminal BEFORE clicking Start; setupCmds run AFTER Start.
   setStage(0, "running");
   // Stage 0 is a sequence of setupCmds; emit one combined log so the dashboard
-  // can show all setup output. The file is truncated on entry and rewritten in
-  // place per setup batch, which matches Stage 0's "runs once per session" role.
+  // can show all setup output. The head truncates the file; each setupCmd
+  // appends its result via writeStageLogTail.
   try { await writeStageLogHead(cfg.workdir, 0, 0, `setupCmds (${cfg.setupCmds?.length ?? 0})`); }
   catch (e) { console.error(`[stage-log] head 0 failed:`, e); }
   for (const cmd of cfg.setupCmds ?? []) {
@@ -447,15 +447,16 @@ async function runSession(cfg: Config, term: Terminal): Promise<void> {
       continue;
     }
 
-    let decisionStdout = "";
+    let decisionStdout: string;
     if (better) {
-      const delta = metric - best!;
-      best        = metric;
-      sinceBest   = 0;
+      const oldBest = best!;
+      const delta   = metric - oldBest;
+      best          = metric;
+      sinceBest     = 0;
       console.error(`[autoresearch] ✓ keep  metric=${metric}  delta=${delta}`);
       append(cfg.tsvPath, makeRow(n, "keep", metric, delta, v, "keep"));
       setStage(5, "done");
-      decisionStdout = `decision: keep\nmetric: ${metric}\ndelta: ${delta}\nbest: ${best}\n`;
+      decisionStdout = `decision: keep\nmetric: ${metric}\ndelta: ${delta}\nbest (new): ${best}\nbest (old): ${oldBest}\n`;
     } else {
       await term.run("git revert --no-edit HEAD");
       sinceBest++;
