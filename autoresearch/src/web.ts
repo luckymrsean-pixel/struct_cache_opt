@@ -102,10 +102,10 @@ function broadcast(wss: WebSocketServer, msg: object): void {
   for (const client of wss.clients) {
     if (client.readyState === WebSocket.OPEN) { client.send(s); n++; }
   }
-  // Only log "interesting" broadcasts. Routine ones (pty bytes, the 2-sec
-  // status/git/log/history pulses) would drown out the per-stage [iter N]
-  // lines we actually care about. Keep: toast, dead, restarted,
-  // restart-failed, restart-check-result, anything novel.
+  // Only log "interesting" broadcasts. Routine ones (the 2-sec
+  // status/git/log/history/skill-state pulses) would drown out the per-stage
+  // [iter N] lines we actually care about. Keep: toast, stage-log-updated,
+  // anything novel.
   const t = (msg as { type?: string }).type;
   const ROUTINE = new Set(["status", "git", "log", "history", "skill-state"]);
   if (t && !ROUTINE.has(t)) {
