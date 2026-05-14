@@ -252,12 +252,7 @@ Response:
 - Resolves tags via `git -C ${cfg.skillDir} tag --points-at <ref>` (skipping the rolling `champion` label, same logic meta-bench.sh already uses).
 - 404 / empty manifest is tolerated: server returns `{manifest:{frozen:[],evolving:[]}, current:{head:""}, champion:{head:""}, diff:[]}` and the panel shows "No skill manifest at <path>".
 
-**New config field** in vk-image-helper.yml:
-```yaml
-skillDir: /mnt/f/code2/target_skill/struct_layout_opt
-```
-
-If absent, defaults to `dirname(cfg.ideatePrompt)` (best-effort guess — works because today's prompt is `${skillDir}/run.sh`). The defaulting code logs a stderr warning so the operator can add the explicit field.
+**Existing config field** — `skillDir?: string` already declared at [config.ts:13](../../autoresearch/src/config.ts#L13) and set in [vk-image-helper.yml:28](../../vk-image-helper.yml#L28) (`/mnt/f/code2/target_skill/struct_layout_opt`). No yml/config schema change needed; `getSkillState()` reads `cfg.skillDir` directly. When `cfg.skillDir` is undefined, `/api/skill-state` returns `{manifest:{frozen:[],evolving:[]}, current:{head:""}, champion:{head:""}, diff:[]}` and the panel shows "skillDir not configured".
 
 **Periodic broadcast** — server adds `getSkillState(cfg)` to the 2s status interval already in [web.ts:486-499](../../autoresearch/src/web.ts#L486-L499), and also pushes it as part of the WS handshake. Frequency is fine: MANIFEST.yml + numstat is < 5 ms even on a cold cache.
 
@@ -356,10 +351,9 @@ Eliminates the 2-second window where the right panel shows nothing (or mock comm
 | `Autoresearch Dashboard.html` | +180 / -150 | HTML restructure (center column), CSS for quadrants, JS for `/api/skill-state` + `/api/stage-log` polling, demo URL gate |
 | `autoresearch/src/loop.ts` | +50 / -0 | `withStageLog` helper + 6 stage wrappers |
 | `autoresearch/src/web.ts` | +120 / -60 | new endpoints + handshake history send + remove cli/main broadcasts + remove stderr mirror |
-| `autoresearch/src/config.ts` | +5 / -0 | parse `skillDir` field |
-| `vk-image-helper.yml` | +1 / -0 | add `skillDir:` |
-| `autoresearch/src/tests/stage-log.test.ts` | new, ~80 LOC | unit test |
-| `autoresearch/src/tests/skill-state.test.ts` | new, ~100 LOC | unit test |
+| `autoresearch/scripts/test-stage-log.ts` | new, ~80 LOC | unit test (tsx + node:assert, registered in run-all-tests.sh) |
+| `autoresearch/scripts/test-skill-state.ts` | new, ~100 LOC | unit test (tsx + node:assert, registered in run-all-tests.sh) |
+| `autoresearch/scripts/run-all-tests.sh` | +2 / 0 | register the 2 new suites |
 | `how-to.md` | +10 / -3 | document new `.ar/` dir, `?demo=1` URL, that cli pane is gone |
 
 Total: roughly +550 / -210 lines.
