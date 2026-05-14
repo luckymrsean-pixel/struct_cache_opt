@@ -107,7 +107,7 @@ run rm -f "$RESULTS_TSV"
 echo "[meta-bench] running $N inner iters → $RESULTS_TSV (this takes ~$((N*5)) minutes)" >&2
 if [ "$DRY_RUN" -eq 0 ]; then
   cd "$CACHE_ROOT/autoresearch"
-  AR_TSV="$RESULTS_TSV" AR_ITERS="$N" AR_HEADLESS=1 \
+  AR_TSV="$RESULTS_TSV" AR_ITERS="$N" AR_HEADLESS="${AR_HEADLESS:-1}" \
     timeout $((N * 600)) npx tsx src/index.ts "$CACHE_ROOT/vk-image-helper.yml" 2>&1 | \
     tee "$RUN_DIR/autoresearch.log"
 fi
