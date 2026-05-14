@@ -62,9 +62,10 @@ html,body { height:100%; overflow:hidden; font-family:var(--sans); font-size:13p
 .pill.running { background:#0d2818; color:var(--green); border:1px solid #1f4a2a; }
 .pill.idle    { background:#1a1f2a; color:var(--dim);   border:1px solid var(--border); }
 .pill.paused  { background:#1a1a08; color:var(--yellow);border:1px solid #3a3010; }
-.ws-dot { width:7px; height:7px; border-radius:50%; background:var(--dim); flex-shrink:0; }
+.ws-dot { width:7px; height:7px; border-radius:50%; background:var(--dim, #6e7681); flex-shrink:0; }
 .ws-dot.connected { background:var(--green); }
 .ws-dot.demo { background:var(--yellow); }
+.ws-dot.dead      { background:var(--red, #f85149); }
 
 /* ── Left panel ──────────────────────────── */
 #left { border-right:1px solid var(--border); overflow-y:auto; padding:14px; display:flex; flex-direction:column; gap:16px; }
@@ -317,9 +318,10 @@ label.field-lbl { display:block; font-size:10px; color:var(--dim); margin-bottom
     </label>
   </div>
   <div class="tb-sep"></div>
-  <div style="display:flex;align-items:center;gap:5px;">
-    <div class="ws-dot demo" id="ws-dot"></div>
-    <span style="font-size:11px;color:var(--dim)" id="ws-label">demo</span>
+  <div style="display:flex;align-items:center;gap:8px;">
+    <span id="demo-pill" style="display:none;background:var(--orange,#e3b341);color:#0d1117;font-size:10px;font-weight:600;padding:2px 8px;border-radius:3px;letter-spacing:0.5px;">DEMO</span>
+    <div class="ws-dot" id="ws-dot"></div>
+    <span style="font-size:11px;color:var(--dim)" id="ws-label">连接中…</span>
   </div>
 </div>
 
@@ -685,16 +687,11 @@ function connectWS() {
     };
     ws.onclose = () => {
       ws = null;
-      document.getElementById('ws-dot').className = 'ws-dot demo';
-      document.getElementById('ws-label').textContent = '断开 — 轮询 /api/state 中…';
+      document.getElementById('ws-dot').className = 'ws-dot dead';
+      document.getElementById('ws-label').textContent = '服务器已断开 — 重连中…';
       const delay = WS_DELAYS[Math.min(wsReconnectAttempt, WS_DELAYS.length - 1)];
       wsReconnectAttempt++;
-      // First close → start HTTP polling fallback (works through proxies that
-      // block WebSocket Upgrade, e.g. VS Code Simple Browser via Clash).
       startPolling();
-      // After 3 unsuccessful retries also fall back to demo so the page doesn't
-      // look dead even if /api/state itself is unreachable.
-      if (wsReconnectAttempt === 3 && !demoRunning) startDemo();
       setTimeout(connectWS, delay);
     };
     ws.onerror = () => { /* onclose will handle reconnect */ };
@@ -762,10 +759,44 @@ const G='\x1b[32m',Y='\x1b[33m',B='\x1b[34m',C='\x1b[36m',R='\x1b[31m',D='\x1b[2
 function startDemo() {
   if (demoRunning) return;
   demoRunning = true;
-  // Demo body deferred to Task 11 — until then, no-op so the page doesn't crash
-  // when WS reconnects fail and demoRunning gate is hit. Task 11 redirects demo
-  // output to the new Stage Log <pre>.
-  console.warn('[demo] disabled — will be re-enabled in Task 11');
+  document.getElementById('tb-status').innerHTML = '<span class="pill running">running</span>';
+  document.getElementById('tb-iter').textContent = '1 / 20';
+
+  const stripAnsiPlain = s => s.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
+  const writeMain = s => {
+    slpBody.textContent += stripAnsiPlain(s);
+    slpBody.scrollTop = slpBody.scrollHeight;
+  };
+
+  writeMain(`${D}[autoresearch] demo mode — simulating pipeline${W}${N}${N}`);
+
+  const seq = [
+    [300,  () => { writeMain(`${D}── Stage 0: Init & Claude Login ──${W}${N}`); setStageStatus(0,'running'); }],
+    [600,  () => { writeMain(`${G}✓ Claude authenticated${W}${N}`); setStageStatus(0,'done'); }],
+    [400,  () => { writeMain(`${N}${D}── Stage 1: Generate Diff ──${W}${N}`); setStageStatus(1,'running'); }],
+    [200,  () => { writeMain(`${D}$ ${C}struct_layout_opt skill${W}${N}`); }],
+    [800,  () => { writeMain(`${C}Analyzing ANGLE rendering pipeline...${W}${N}`); }],
+    [700,  () => { writeMain(`${C}Generating struct layout optimization...${W}${N}`); }],
+    [600,  () => { writeMain(`${G}diff --git a/src/libANGLE/Context.h b/src/libANGLE/Context.h${W}${N}+  alignas(64) ContextState mState;${N}+  __builtin_prefetch(&mState, 0, 3);${N}`); }],
+    [300,  () => { setStageStatus(1,'done'); }],
+    [200,  () => { writeMain(`${N}${D}── Stage 2: Apply Diff ──${W}${N}`); setStageStatus(2,'running'); }],
+    [300,  () => { writeMain(`${G}✓ git apply .ar.patch${W}${N}`); setStageStatus(2,'done'); }],
+    [200,  () => { writeMain(`${N}${D}── Stage 3: Build & Health Test ──${W}${N}`); setStageStatus(3,'running'); }],
+    [1200, () => { writeMain(`${D}Building... (logs → stage-3.log)${W}${N}`); }],
+    [900,  () => { writeMain(`${G}✓ Build succeeded${W}${N}`); setStageStatus(3,'done'); }],
+    [200,  () => { writeMain(`${N}${D}── Stage 4: Benchmark ──${W}${N}`); setStageStatus(4,'running'); }],
+    [1000, () => { writeMain(`${D}Running perf stat... (logs → stage-4.log)${W}${N}`); }],
+    [700,  () => { writeMain(`${G}  1,234,567,890${W} cpu-cycles${N}`); setStageStatus(4,'done'); }],
+    [200,  () => { writeMain(`${N}${D}── Stage 5: Extract Perf & Commit ──${W}${N}`); setStageStatus(5,'running'); }],
+    [400,  () => { writeMain(`${D}git commit -m "experiment: iter 4  cycles=1234567890"${W}${N}`); }],
+    [300,  () => { writeMain(`${G}✓ Committed — all stage logs archived${W}${N}`); setStageStatus(5,'done'); }],
+    [200,  () => { writeMain(`${N}${D}── Stage 6: Auto Search ──${W}${N}`); setStageStatus(6,'running'); }],
+    [400,  () => { writeMain(`${G}[autoresearch] ✓ keep  metric=1234567890  delta=-415432110${W}${N}`); setStageStatus(6,'done'); document.getElementById('tb-iter').textContent='2 / 20'; }],
+  ];
+
+  let i = 0;
+  function next() { if (i>=seq.length) return; const [d,fn]=seq[i++]; setTimeout(()=>{ fn(); next(); }, d); }
+  next();
 }
 
 // ─── HTTP polling fallback ────────────────────────────────────────────────────
@@ -942,12 +973,28 @@ function closeModal() {
   document.addEventListener('mouseup', () => { drag = false; });
 }
 
-// Don't auto-fire demo at 1.2s — startPolling() already kicks in on first
-// WS close, so the page never goes dead even when WS is blocked. Demo only
-// fires after 3 reconnect failures (see ws.onclose) AND polling has nothing.
-refetchStageLog();
-fetch('/api/skill-state').then(r => r.json()).then(renderSkillState).catch(() => {});
-connectWS();
+const DEMO_MODE = new URLSearchParams(location.search).has('demo');
+
+if (DEMO_MODE) {
+  document.getElementById('demo-pill').style.display = '';
+  document.getElementById('ws-dot').className = 'ws-dot demo';
+  document.getElementById('ws-label').textContent = 'demo';
+  // Restore the 4 fake commits ONLY in demo mode (real load path drops them).
+  renderHistory({
+    branch:'main',
+    commits:[
+      { hash:'c9e3f21',iter:3,status:'keep',    metric:1234567890,delta:-415432110,files:['src/libANGLE/Context.h'],isCurrent:true  },
+      { hash:'d8b2a10',iter:2,status:'discard', metric:1780000000,delta:130000000, files:['src/libANGLE/Program.h'],isCurrent:false },
+      { hash:'b1c4e09',iter:1,status:'keep',    metric:1650000000,delta:-150000000,files:['src/libANGLE/State.h'],  isCurrent:false },
+      { hash:'a3f9d1c',iter:0,status:'baseline',metric:1800000000,delta:null,      files:[],                        isCurrent:false },
+    ],
+  });
+  startDemo();
+} else {
+  refetchStageLog();
+  fetch('/api/skill-state').then(r => r.json()).then(renderSkillState).catch(() => {});
+  connectWS();
+}
 </script>
 </body>
 </html>
