@@ -237,10 +237,10 @@ Run: `rm meta-runs/skill-v0/result.json`
 - [ ] **Step 2: Launch the real baseline run**
 
 ```bash
-./scripts/meta-bench.sh --N 10 --skill-tag skill-v0 2>&1 | tee meta-runs/skill-v0-N10.controller.log
+./scripts/meta-bench.sh --N 3 --skill-tag skill-v0 2>&1 | tee meta-runs/skill-v0-N3.controller.log
 ```
 
-Expected wall time: 50–100 minutes. Headless (default). `tail -f meta-runs/skill-v0/autoresearch.log` in a side terminal for live visibility.
+Expected wall time: ~24 minutes (3 iters × ~8 min/iter). Headless (default). `tail -f meta-runs/skill-v0/autoresearch.log` in a side terminal for live visibility. (Operator preference 2026-05-14: N=3 instead of N=10 to reduce wall time while still producing usable signal; ramp back up once skill quality is verified.)
 
 - [ ] **Step 3: Verify baseline shape**
 
@@ -375,10 +375,10 @@ Expected: shows the `meta(rules):` commit subject from Step 4.
 
 ```bash
 cd /mnt/f/code2/struct_cache_opt
-./scripts/meta-bench.sh --N 10 --skill-tag skill-v2 2>&1 | tee meta-runs/skill-v2-N10.controller.log
+./scripts/meta-bench.sh --N 3 --skill-tag skill-v2 2>&1 | tee meta-runs/skill-v2-N3.controller.log
 ```
 
-Expected wall time: 50–100 minutes. Headless (default). `tail -f meta-runs/skill-v2/autoresearch.log` for visibility.
+Expected wall time: ~24 minutes. Headless (default). `tail -f meta-runs/skill-v2/autoresearch.log` for visibility.
 
 - [ ] **Step 2: Verify the run produced the expected artifacts**
 
@@ -429,8 +429,8 @@ Run: `grep -v '^#' /mnt/f/code2/struct_cache_opt/meta_results.tsv | tail -n +2`
 Expected: exactly 3 lines, in order:
 ```
 0	skill-v0	skill-v0	2	... manual	within noise band ...
-1	skill-v0	skill-v0	10	... manual	within noise band ...
-2	skill-v2	skill-v0	10	... <advance|revert|manual> ...
+1	skill-v0	skill-v0	3	... manual	within noise band ...
+2	skill-v2	skill-v0	3	... <advance|revert|manual> ...
 ```
 
 - [ ] **Step 2: Confirm result.json files exist for both versions**
