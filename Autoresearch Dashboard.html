@@ -644,15 +644,10 @@ function renderHistory(msg) {
   }).join('');
 }
 
-renderHistory({
-  branch:'main',
-  commits:[
-    { hash:'c9e3f21',iter:3,status:'keep',    metric:1234567890,delta:-415432110,files:['src/libANGLE/Context.h'],isCurrent:true  },
-    { hash:'d8b2a10',iter:2,status:'discard', metric:1780000000,delta:130000000, files:['src/libANGLE/Program.h'],isCurrent:false },
-    { hash:'b1c4e09',iter:1,status:'keep',    metric:1650000000,delta:-150000000,files:['src/libANGLE/State.h'],  isCurrent:false },
-    { hash:'a3f9d1c',iter:0,status:'baseline',metric:1800000000,delta:null,      files:[],                        isCurrent:false },
-  ],
-});
+// Initial render: empty state. Real history arrives via WS handshake (Task 5
+// added `ws.send(getHistory(cfg))` in web.ts). The 4 fake commits previously
+// here are restored only in demo mode by Task 11.
+renderHistory({ branch: '—', commits: [] });
 
 function applyCommit(hash) {
   if (ws && ws.readyState === WebSocket.OPEN) {
