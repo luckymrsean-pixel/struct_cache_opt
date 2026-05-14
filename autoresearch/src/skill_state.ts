@@ -21,12 +21,14 @@ export interface SkillState {
   diff:     DiffEntry[];
 }
 
-const EMPTY: SkillState = {
-  manifest: { frozen: [], evolving: [] },
-  current:  { head: "", tag: "" },
-  champion: { head: "", tag: "" },
-  diff:     [],
-};
+function freshEmpty(): SkillState {
+  return {
+    manifest: { frozen: [], evolving: [] },
+    current:  { head: "", tag: "" },
+    champion: { head: "", tag: "" },
+    diff:     [],
+  };
+}
 
 /** Run `git` in the given dir, return stdout trimmed, or `""` on any failure. */
 function git(dir: string, args: string[]): string {
@@ -79,7 +81,7 @@ function parseNumstat(raw: string): DiffEntry[] {
 }
 
 export function getSkillState(skillDir: string | undefined): SkillState {
-  if (!skillDir || !existsSync(skillDir)) return EMPTY;
+  if (!skillDir || !existsSync(skillDir)) return freshEmpty();
   const manifest = readManifest(skillDir);
   const current  = resolveRef(skillDir, "HEAD");
   const champion = git(skillDir, ["rev-parse", "--verify", "champion"])

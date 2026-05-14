@@ -109,6 +109,25 @@ async function main(): Promise<void> {
     rmSync(empty, { recursive: true, force: true });
   });
 
+  await test("getSkillState handles git repo without champion tag", () => {
+    const fresh = mkdtempSync(join(tmpdir(), "ar-nochamp-"));
+    writeFileSync(join(fresh, "MANIFEST.yml"), "frozen:\n  - SKILL.md\nevolving:\n  - prompt.tmpl\n");
+    writeFileSync(join(fresh, "SKILL.md"),    "x\n");
+    writeFileSync(join(fresh, "prompt.tmpl"), "y\n");
+    const G2 = (cmd: string) => execSync(cmd, { cwd: fresh, encoding: "utf8" }).trim();
+    G2("git init -q");
+    G2("git -c user.email=t@t -c user.name=t add -A");
+    G2("git -c user.email=t@t -c user.name=t commit -q -m initial");
+    // Note: no `git tag champion` — this is the "fresh skill repo" scenario.
+    const s = getSkillState(fresh);
+    if (s.manifest.frozen.length   !== 1) throw new Error(`frozen len ${s.manifest.frozen.length}`);
+    if (s.manifest.evolving.length !== 1) throw new Error(`evolving len ${s.manifest.evolving.length}`);
+    if (s.current.head === "")            throw new Error("current.head should be set");
+    if (s.champion.head !== "")           throw new Error(`champion.head should be empty, got ${s.champion.head}`);
+    if (s.diff.length !== 0)              throw new Error(`diff should be empty, got len ${s.diff.length}`);
+    rmSync(fresh, { recursive: true, force: true });
+  });
+
   rmSync(dir, { recursive: true, force: true });
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed === 0 ? 0 : 1);
