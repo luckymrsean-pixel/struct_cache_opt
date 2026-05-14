@@ -23,6 +23,8 @@
  *     { type:"git",     branch, lastCommit, changed:string[] }
  *     { type:"log",     files: LogFile[] }
  *     { type:"history", commits, head }
+ *     { type:"skill-state",          ...SkillState }   每 2s 推 + 握手
+ *     { type:"stage-log-updated",    stage:number }    fs.watch 触发
  *     { type:"toast",   msg:string }
  *
  *   client → server (只对 term==="cli" 有效):
@@ -300,6 +302,44 @@ export function startWebServer(
       }
     }
 
+    // Skill manifest + diff-vs-champion summary (top-center quadrants).
+    if (url === "/api/skill-state") {
+      const state = getSkillState(cfg.skillDir);
+      res.writeHead(200, {
+        "Content-Type":  "application/json; charset=utf-8",
+        "Cache-Control": "no-store",
+      });
+      res.end(JSON.stringify(state));
+      return;
+    }
+
+    // Unified diff for one evolving file vs champion (drives diff modal).
+    {
+      const m = url.match(/^\/api\/skill-diff\?path=([^&]+)/);
+      if (m) {
+        if (!cfg.skillDir) { res.writeHead(404); res.end("skillDir not configured"); return; }
+        const path = decodeURIComponent(m[1]);
+        const body = getSkillDiff(cfg.skillDir, path);
+        res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+        res.end(body || `(no diff for ${path})`);
+        return;
+      }
+    }
+
+    // File contents at the champion ref (drives winner modal).
+    {
+      const m = url.match(/^\/api\/skill-show\?ref=([^&]+)&path=([^&]+)/);
+      if (m) {
+        if (!cfg.skillDir) { res.writeHead(404); res.end("skillDir not configured"); return; }
+        const ref  = decodeURIComponent(m[1]);
+        const path = decodeURIComponent(m[2]);
+        const body = getSkillShow(cfg.skillDir, ref, path);
+        res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+        res.end(body || `(no content at ${ref}:${path})`);
+        return;
+      }
+    }
+
     // REST polling endpoint — returns everything the dashboard needs in one
     // JSON payload, so the UI can stay live even when the WebSocket Upgrade
     // is blocked (corporate proxy, VS Code Simple Browser, etc.).
@@ -475,6 +515,8 @@ export function startWebServer(
     } satisfies StatusMsg));
     ws.send(JSON.stringify(getGitStatus(cfg.workdir)));
     ws.send(JSON.stringify(getLogFiles(cfg)));
+    ws.send(JSON.stringify(getHistory(cfg)));
+    ws.send(JSON.stringify({ type: "skill-state", ...getSkillState(cfg.skillDir) }));
 
     // Only the cli pane accepts keystrokes / resize / restart from the
     // dashboard. The "main" pane is a read-only mirror of loopTerm.
@@ -549,6 +591,7 @@ export function startWebServer(
     broadcast(wss, getGitStatus(cfg.workdir));
     broadcast(wss, getLogFiles(cfg));
     broadcast(wss, getHistory(cfg));
+    broadcast(wss, { type: "skill-state", ...getSkillState(cfg.skillDir) });
   }, 2000);
 
   server.listen(port, () => {
