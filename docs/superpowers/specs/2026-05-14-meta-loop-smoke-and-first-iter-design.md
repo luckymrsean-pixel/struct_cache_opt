@@ -169,6 +169,26 @@ No new dashboard yet. If meta-iters accumulate to where the TSV becomes hard to 
 - Changes to inner-loop scoring (M1..M5 definitions).
 - Splitting `pahole_extractor` into frozen/evolving — it's upstream infrastructure shared with other skills, not subject to the meta-loop.
 
+## 8.1 Smoke pass outcome (2026-05-14, post-execution addendum)
+
+Recorded for the implementation history. The N=2 smoke pass on `skill-v0` produced:
+
+| Metric | Value |
+|---|---|
+| M1_total_drop | 0 (no improvement) |
+| M2_apply_rate | 50% (1 of 2 iters applied cleanly) |
+| M3_keep_rate | 0% (the one applied iter regressed cache-misses by +4.3M and was reverted) |
+| M4_struct_coverage | 0 |
+| M5_keep_delta_cv | None (no kept iters to compute) |
+| baseline | 73,381,300 cache-misses |
+| final | 73,381,300 (unchanged from baseline after the regress→revert) |
+| decision | manual within noise band |
+
+The smoke surfaced one transient (iter 1 apply-fail with garbage stdout — looked like `pahole_extractor: wrote 0 structs` had stripped DWARF names) and one real-data regression (iter 2 valid diff, built, but regressed). Both behaviors are within the harness's normal operating envelope. The verdict row was correctly appended.
+
+**Pre-existing concerns surfaced (not blocking Phase 1 spec):**
+- `vk_helpers.o` DWARF entries have all class-name strings set to offset 0 (827 of 827 entries). Pahole correctly returns 0 named types. The skill still produces diffs on subsequent iters because state persists between them (`empty_struct_index.tsv` is append-only) and the LLM falls back to whatever it remembers. Iteration value is limited until the DWARF strip issue in the Chromium debug build is rooted-out — but that work is outside this spec.
+
 ## 9. Risks and unknowns
 
 | Risk | Likelihood | Mitigation |
