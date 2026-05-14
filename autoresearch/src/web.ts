@@ -304,6 +304,7 @@ export function startWebServer(
 
     // Skill manifest + diff-vs-champion summary (top-center quadrants).
     if (url === "/api/skill-state") {
+      if (!cfg.skillDir) { res.writeHead(404); res.end("skillDir not configured"); return; }
       const state = getSkillState(cfg.skillDir);
       res.writeHead(200, {
         "Content-Type":  "application/json; charset=utf-8",
