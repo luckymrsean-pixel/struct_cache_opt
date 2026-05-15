@@ -909,7 +909,7 @@ function renderSkillState(s) {
     </li>`;
   };
 
-  document.getElementById('ql-fz').innerHTML = frozen.map(p => fileLi(p)).join('');
+  document.getElementById('ql-fz').innerHTML = frozen.map(p => fileLi(p, { clickable:true, action:'show-champion' })).join('');
   document.getElementById('ql-eu').innerHTML = unchanged.map(p => fileLi(p, { clickable:true, action:'show-champion' })).join('');
   document.getElementById('ql-ec').innerHTML = changed.map(p => fileLi(p, { clickable:true, action:'show-diff', diffEntry: diffSet.get(p) })).join('');
   document.getElementById('ql-wn').innerHTML = evolving.map(p => fileLi(p, { clickable:true, action:'show-champion' })).join('');

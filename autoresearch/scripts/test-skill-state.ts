@@ -128,6 +128,52 @@ async function main(): Promise<void> {
     rmSync(fresh, { recursive: true, force: true });
   });
 
+  await test("skillDir is a SUBDIRECTORY of the git repo (real meta-loop topology)", () => {
+    // Regression: the real skill repo is target_skill/ (git root) but skillDir
+    // is target_skill/struct_layout_opt/. git show <ref>:<path> resolves <path>
+    // from the repo ROOT, and `git diff --numstat` (no --relative) emits
+    // repo-root paths — both break MANIFEST-relative lookups. Prior fixtures
+    // built the repo AT skillDir so this never got exercised.
+    const root = mkdtempSync(join(tmpdir(), "ar-subdir-"));
+    const sub  = join(root, "struct_layout_opt");
+    mkdirSync(join(sub, "inputs"), { recursive: true });
+    writeFileSync(join(sub, "MANIFEST.yml"),
+      "frozen:\n  - SKILL.md\nevolving:\n  - prompt.tmpl\n  - inputs/rules.MD\n");
+    writeFileSync(join(sub, "SKILL.md"),        "frozen content\n");
+    writeFileSync(join(sub, "prompt.tmpl"),     "champion prompt\n");
+    writeFileSync(join(sub, "inputs/rules.MD"), "champion rules\n");
+    // Unrelated file OUTSIDE the skill subdir — must NOT leak into diff/state.
+    writeFileSync(join(root, "README.md"),      "repo root readme\n");
+    const G3 = (cmd: string) => execSync(cmd, { cwd: root, encoding: "utf8" }).trim();
+    G3("git init -q");
+    G3("git -c user.email=t@t -c user.name=t add -A");
+    G3("git -c user.email=t@t -c user.name=t commit -q -m initial");
+    G3("git tag champion");
+    // Candidate change: edit an evolving file in the subdir.
+    writeFileSync(join(sub, "prompt.tmpl"), "candidate prompt\nline2\n");
+    G3("git -c user.email=t@t -c user.name=t add -A");
+    G3("git -c user.email=t@t -c user.name=t commit -q -m candidate");
+
+    const s = getSkillState(sub);
+    // diff must report the subdir-relative path, matching MANIFEST entries.
+    if (s.diff.length !== 1)              throw new Error(`diff len ${s.diff.length} (expected 1: prompt.tmpl)`);
+    if (s.diff[0].path !== "prompt.tmpl") throw new Error(`diff path ${s.diff[0].path} (expected prompt.tmpl, not struct_layout_opt/prompt.tmpl)`);
+    if (s.diff[0].added !== 2)            throw new Error(`diff added ${s.diff[0].added}`);
+
+    // getSkillShow must resolve subdir-relative paths against champion.
+    const shown = getSkillShow(sub, "champion", "prompt.tmpl");
+    if (shown.trim() !== "champion prompt") throw new Error(`show champion:prompt.tmpl => ${JSON.stringify(shown)}`);
+    const frozenShown = getSkillShow(sub, "champion", "SKILL.md");
+    if (frozenShown.trim() !== "frozen content") throw new Error(`show champion:SKILL.md => ${JSON.stringify(frozenShown)}`);
+
+    // getSkillDiff must return a non-empty unified diff for the changed file.
+    const d = getSkillDiff(sub, "prompt.tmpl");
+    if (!d.includes("-champion prompt")) throw new Error(`getSkillDiff missing old line:\n${d}`);
+    if (!d.includes("+candidate prompt")) throw new Error(`getSkillDiff missing new line:\n${d}`);
+
+    rmSync(root, { recursive: true, force: true });
+  });
+
   rmSync(dir, { recursive: true, force: true });
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed === 0 ? 0 : 1);

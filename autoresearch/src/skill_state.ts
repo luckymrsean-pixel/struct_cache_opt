@@ -87,18 +87,27 @@ export function getSkillState(skillDir: string | undefined): SkillState {
   const champion = git(skillDir, ["rev-parse", "--verify", "champion"])
     ? resolveRef(skillDir, "champion")
     : { head: "", tag: "" };
+  // --relative: skillDir may be a SUBDIRECTORY of the git repo (the meta-loop
+  // skill repo root is target_skill/, skillDir is target_skill/struct_layout_opt).
+  // Without --relative, numstat emits repo-root paths (struct_layout_opt/foo)
+  // that never match MANIFEST.yml's subdir-relative paths (foo).
   const diff = champion.head
-    ? parseNumstat(git(skillDir, ["diff", "--numstat", "champion..HEAD"]))
+    ? parseNumstat(git(skillDir, ["diff", "--numstat", "--relative", "champion..HEAD"]))
     : [];
   return { manifest, current, champion, diff };
 }
 
 /** Unified diff for one file vs champion. Empty string if anything fails. */
 export function getSkillDiff(skillDir: string, path: string): string {
-  return git(skillDir, ["diff", "champion..HEAD", "--", path]);
+  return git(skillDir, ["diff", "--relative", "champion..HEAD", "--", path]);
 }
 
-/** File contents at the given ref. Empty string if anything fails. */
+/**
+ * File contents at the given ref. Empty string if anything fails.
+ * The `./` prefix forces git to resolve <path> relative to cwd (skillDir)
+ * rather than the repo root — required when skillDir is a subdirectory of
+ * the git repo (see getSkillState's --relative note).
+ */
 export function getSkillShow(skillDir: string, ref: string, path: string): string {
-  return git(skillDir, ["show", `${ref}:${path}`]);
+  return git(skillDir, ["show", `${ref}:./${path}`]);
 }
