@@ -175,14 +175,26 @@ def main() -> int:
         Path(args.champion_result), Path(args.champion_inner_tsv),
     )
 
-    cli = os.environ.get(
-        "IDEATE_CLI",
-        'claude -p --tools "" --output-format json --no-session-persistence',
-    )
-    cli = f"{cli} --max-budget-usd {args.max_usd}" if "--max-budget-usd" not in cli else cli
+    # Route through the skill's choosable backend wrapper so the meta-loop's
+    # proposer uses the SAME ideate backend (claude|copilot) as the inner loop.
+    # Falls back to a raw IDEATE_CLI string if the wrapper is absent (older skill).
+    wrapper = skill_dir / "lib" / "ideate_backend.sh"
+    if wrapper.is_file():
+        cmd = ["bash", str(wrapper)]
+        env = {**os.environ, "IDEATE_MAX_USD": str(args.max_usd)}
+        env.setdefault("IDEATE_BACKEND", os.environ.get("IDEATE_BACKEND", "claude"))
+        runner = lambda: subprocess.run(cmd, input=prompt, capture_output=True,
+                                        text=True, timeout=900, env=env)
+    else:
+        cli = os.environ.get(
+            "IDEATE_CLI",
+            'claude -p --tools "" --output-format json --no-session-persistence',
+        )
+        cli = f"{cli} --max-budget-usd {args.max_usd}" if "--max-budget-usd" not in cli else cli
+        runner = lambda: subprocess.run(cli, shell=True, input=prompt,
+                                        capture_output=True, text=True, timeout=900)
     try:
-        proc = subprocess.run(cli, shell=True, input=prompt,
-                               capture_output=True, text=True, timeout=900)
+        proc = runner()
     except subprocess.TimeoutExpired:
         print("propose: LLM timeout", file=sys.stderr)
         return 3

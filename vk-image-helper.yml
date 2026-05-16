@@ -36,14 +36,20 @@ contextCmds: []
 
 # ── Env exported into the PTY before each session ────────────────────────────
 env:
-  # Non-agentic, deterministic ideate. `claude -p` defaults to ALL tools
-  # enabled → it ran autoninja/edits itself and replied in prose instead of a
-  # diff (root cause of apply-fail; see specs/2026-05-16-…-design.md §2).
-  # --tools "" disables every tool; --output-format json isolates the model
-  # text in .result (run.sh pipes through lib/extract_result.py). Verified
-  # 2026-05-16 on claude v2.1.138: even via unquoted $ideate_cli word-split
-  # the literal "" token is normalized to "disable all tools".
-  IDEATE_CLI:     'claude -p --tools "" --output-format json --no-session-persistence --max-budget-usd 1.50'
+  # Ideate is non-agentic and CHOOSABLE between two backends. IDEATE_CLI points
+  # at the skill's backend wrapper (reads the prompt on stdin per run.sh's
+  # contract); IDEATE_BACKEND selects which CLI it dispatches to:
+  #   claude  — `claude -p --tools "" --output-format json` (reads stdin; JSON
+  #             .result unwrapped by lib/extract_result.py).
+  #   copilot — `copilot -p "@<tmpfile>" -s --available-tools=` (no tools;
+  #             prompt passed as a file because the ~191KB prompt exceeds the
+  #             argv size limit; plain-text reply).
+  # Both are non-agentic (no tools → cannot build/edit, must emit a diff).
+  # parse_output.py tolerates either's preamble/fences. Flip backend without
+  # touching the skill: just change IDEATE_BACKEND here, then stop→start.
+  IDEATE_CLI:      'bash /mnt/f/code2/target_skill/struct_layout_opt/lib/ideate_backend.sh'
+  IDEATE_BACKEND:  copilot          # claude | copilot
+  IDEATE_MAX_USD:  '1.50'           # claude backend per-call budget cap
   AR_DEPOT_TOOLS: /home/fxy/depot_tools
   AR_GFX_DIR:     /home/fxy/work/gfxbench/tfw-pkg
   # AR_PERF_LOG kept for future perf re-enable; verifyCmd currently doesn't write it

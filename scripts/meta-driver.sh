@@ -45,8 +45,24 @@ trap 'rm -f "$PID_FILE"' EXIT
 
 dlog() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" | tee -a "$DRIVER_LOG" >&2; }
 
+# Single source of truth for the ideate backend = the yml the inner loop uses.
+# Propagate it so propose_meta_edit.py uses the SAME backend (claude|copilot)
+# as meta-bench's inner loop. Honor a pre-set env override if present.
+YML="$CACHE_ROOT/vk-image-helper.yml"
+if [ -z "${IDEATE_BACKEND:-}" ] && [ -f "$YML" ]; then
+  IDEATE_BACKEND=$(grep -E '^\s*IDEATE_BACKEND:' "$YML" | head -1 \
+    | sed -E 's/^[^:]*:\s*//; s/\s*#.*$//; s/[" ]//g')
+fi
+export IDEATE_BACKEND="${IDEATE_BACKEND:-claude}"
+if [ -z "${IDEATE_MAX_USD:-}" ] && [ -f "$YML" ]; then
+  IDEATE_MAX_USD=$(grep -E '^\s*IDEATE_MAX_USD:' "$YML" | head -1 \
+    | sed -E 's/^[^:]*:\s*//; s/\s*#.*$//; s/['"'"'" ]//g')
+fi
+export IDEATE_MAX_USD="${IDEATE_MAX_USD:-1.50}"
+
 skill_dir="$SKILL_REPO/$SKILL_SUBDIR"
 spent=0
+dlog "ideate backend = $IDEATE_BACKEND (max_usd=$IDEATE_MAX_USD)"
 
 dlog "meta-driver start: meta_iters=$META_ITERS N=$N dry_run=$DRY_RUN"
 
