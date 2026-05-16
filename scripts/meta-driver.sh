@@ -102,14 +102,26 @@ for ((k = 1; k <= META_ITERS; k++)); do
   dlog "proposal: FILE=$P_FILE SCOPE=$P_SCOPE :: $P_ONE"
 
   # 3. Apply + meta: commit + tag. propose_meta_edit emits skill-subdir-
-  # relative paths (e.g. `a/inputs/rules.MD`), so apply from $skill_dir (NOT
-  # the repo root) — otherwise git looks for repo-root `inputs/rules.MD`
-  # ("No such file or directory") and every meta-iter skips. Same LLM-diff
-  # fragility as the inner loop: exact git apply --recount → fuzzy patch.
-  if ! ( git -C "$skill_dir" apply --recount "/tmp/meta-driver.diff" 2>>"$DRIVER_LOG" \
-         || ( cd "$skill_dir" && patch -p1 --fuzz=3 --no-backup-if-mismatch -s \
-                < /tmp/meta-driver.diff ) 2>>"$DRIVER_LOG" ); then
-    dlog "skip meta-iter $k: proposed diff did not apply (git apply + patch fuzz both failed)"
+  # relative paths (`a/inputs/rules.MD`). Cascade:
+  #  (a) exact `git apply --recount --directory=$SKILL_SUBDIR` from repo root
+  #      (errors loudly on mismatch — does NOT silently no-op like
+  #      `git -C subdir apply` did, which made every meta-iter skip);
+  #  (b) recount_diff.py fixes bogus @@ counts/start lines so GNU
+  #      `patch -p1 --fuzz=3` (run inside $skill_dir) relocates by context.
+  applied=0
+  if git -C "$SKILL_REPO" apply --recount --directory="$SKILL_SUBDIR" \
+        /tmp/meta-driver.diff 2>>"$DRIVER_LOG"; then
+    applied=1
+  else
+    python3 "$CACHE_ROOT/scripts/recount_diff.py" < /tmp/meta-driver.diff \
+      > /tmp/meta-driver.recount.diff 2>>"$DRIVER_LOG"
+    if ( cd "$skill_dir" && patch -p1 --fuzz=3 --no-backup-if-mismatch -s \
+           < /tmp/meta-driver.recount.diff ) 2>>"$DRIVER_LOG"; then
+      applied=1
+    fi
+  fi
+  if [ "$applied" -ne 1 ] || git -C "$SKILL_REPO" diff --quiet -- "$SKILL_SUBDIR/$P_FILE"; then
+    dlog "skip meta-iter $k: proposed diff did not apply / changed nothing"
     git -C "$SKILL_REPO" checkout -q -- . 2>/dev/null || true
     continue
   fi

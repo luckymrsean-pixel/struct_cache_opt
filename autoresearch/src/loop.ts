@@ -3,6 +3,13 @@ import { ensure, append, tail, bestSoFar, Row } from "./logger";
 import { Config } from "./config";
 import { loopState, setStage, resetIterStages } from "./web";
 import { writeStageLogHead, writeStageLogTail } from "./stage_log";
+import { join } from "path";
+
+// S/scripts/recount_diff.py (loop.ts is autoresearch/src → ../../scripts).
+// LLM diffs ship bogus @@ counts AND hallucinated start lines; recount makes
+// them parse-clean so `patch --fuzz` can relocate the hunk by context.
+declare const __dirname: string;
+const RECOUNT = join(__dirname, "..", "..", "scripts", "recount_diff.py");
 
 // ─── Runtime + dashboard controller ───────────────────────────────────────────
 //
@@ -349,16 +356,17 @@ async function runSession(cfg: Config, term: Terminal): Promise<void> {
     const patchTag = `AR_EOF_${rand()}`;
     const apply = await runWithStageLog(
       term, cfg.workdir, 2, n,
-      // LLM-authored unified diffs are fragile two ways: (1) `@@ -a,b +c,d @@`
-      // counts off by ±1 — `git apply --recount` recomputes them; (2) context
-      // lines slightly off / multi-hunk offset drift — `git apply` rejects
-      // these outright but GNU `patch --fuzz` absorbs them. Cascade: prefer the
-      // exact git apply (least chance of misplacement); fall back to fuzzy
-      // patch so a usable diff still lands. Build+verify+scope-guard downstream
-      // catch any mis-fuzzed result (→ discard), so tolerance here is safe.
+      // LLM diffs are fragile 3 ways: bogus @@ counts, hallucinated start
+      // lines, and context drift. Cascade: (1) exact `git apply --recount`
+      // (fast path for well-formed diffs, least misplacement risk); else
+      // (2) recount_diff.py fixes the @@ counts so the patch parses, then
+      // GNU `patch --fuzz=3` ignores the bogus start line and relocates the
+      // hunk by context. Build+verify+scope-guard downstream discard any
+      // mis-fuzzed result, so tolerance here is safe.
       `cat > .ar.patch <<'${patchTag}'\n${ideate.stdout}\n${patchTag}\n` +
       `( git apply --recount --check .ar.patch && git apply --recount .ar.patch ) || ` +
-      `patch -p1 --fuzz=3 --no-backup-if-mismatch -s < .ar.patch`,
+      `( python3 ${RECOUNT} < .ar.patch > .ar.recount.patch && ` +
+      `patch -p1 --fuzz=3 --no-backup-if-mismatch -s < .ar.recount.patch )`,
     );
     if (apply.exitCode !== 0) {
       setStage(2, "error");
