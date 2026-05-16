@@ -23,7 +23,7 @@
 import * as http from "http";
 import { existsSync, readFileSync, statSync } from "fs";
 import { execSync } from "child_process";
-import { join } from "path";
+import { join, dirname } from "path";
 import { WebSocket, WebSocketServer } from "ws";
 import { InteractivePty } from "./interactive-pty";
 import { Terminal } from "./terminal";
@@ -33,6 +33,7 @@ import { runtime } from "./loop";
 import { watch } from "fs";
 import { stageLogPath } from "./stage_log";
 import { getSkillState, getSkillDiff, getSkillShow } from "./skill_state";
+import { parseMetaState, getMetaRun } from "./meta_state";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -243,6 +244,18 @@ export function startWebServer(
   ];
   const dashPath = dashCandidates.find((p) => existsSync(p)) ?? dashCandidates[0];
 
+  // Meta-loop sources: project root holds meta_results.tsv + meta-runs/ +
+  // meta-driver.pid; the skill git repo (where the `champion` tag lives) is
+  // the parent of cfg.skillDir (…/target_skill/struct_layout_opt → …/target_skill).
+  const metaRootCandidates = [
+    join(__dirname, "..", ".."),       // project root (where this repo lives)
+    process.cwd(),
+  ];
+  const cacheRoot =
+    metaRootCandidates.find((p) => existsSync(join(p, "meta_results.tsv"))) ??
+    metaRootCandidates[0];
+  const skillRepo = cfg.skillDir ? dirname(cfg.skillDir) : "";
+
   const server = http.createServer((req, res) => {
     const url = req.url ?? "/";
 
@@ -369,6 +382,27 @@ export function startWebServer(
       return;
     }
 
+    if (url === "/api/meta-state") {
+      res.writeHead(200, {
+        "Content-Type":  "application/json; charset=utf-8",
+        "Cache-Control": "no-store",
+      });
+      res.end(JSON.stringify(parseMetaState(cacheRoot, skillRepo)));
+      return;
+    }
+
+    if (url.startsWith("/api/meta-run")) {
+      const tag = new URL(url, "http://x").searchParams.get("tag") ?? "";
+      const detail = getMetaRun(cacheRoot, tag);
+      if (!detail) { res.writeHead(404); res.end("unknown meta run"); return; }
+      res.writeHead(200, {
+        "Content-Type":  "application/json; charset=utf-8",
+        "Cache-Control": "no-store",
+      });
+      res.end(JSON.stringify(detail));
+      return;
+    }
+
     if (existsSync(dashPath)) {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       res.end(readFileSync(dashPath));
@@ -406,6 +440,24 @@ export function startWebServer(
     armWatcher();
   }
 
+  // Watch the meta-loop lineage + driver heartbeat; notify clients to re-pull
+  // /api/meta-state (same pull-on-notify pattern as the stage-log panel).
+  for (const rel of ["meta_results.tsv", join("meta-runs", "driver.log")]) {
+    const p = join(cacheRoot, rel);
+    const armMeta = () => {
+      if (!existsSync(p)) { setTimeout(armMeta, 5000); return; }
+      try {
+        watch(p, { persistent: false }, () => {
+          broadcast(wss, { type: "meta-updated" });
+        });
+      } catch (e) {
+        console.error(`[meta-state] watch ${rel} failed:`, e);
+        setTimeout(armMeta, 5000);
+      }
+    };
+    armMeta();
+  }
+
   wss.on("connection", (ws: WebSocket, req) => {
     const peer = req.socket.remoteAddress ?? "?";
     console.error(`[web] WS connect from ${peer} (clients=${wss.clients.size})`);
@@ -430,6 +482,7 @@ export function startWebServer(
     ws.send(JSON.stringify(getLogFiles(cfg)));
     ws.send(JSON.stringify(getHistory(cfg)));
     ws.send(JSON.stringify({ type: "skill-state", ...getSkillState(cfg.skillDir) }));
+    ws.send(JSON.stringify(parseMetaState(cacheRoot, skillRepo)));
 
     ws.on("message", async (raw: Buffer) => {
       try {
@@ -485,6 +538,7 @@ export function startWebServer(
     broadcast(wss, getLogFiles(cfg));
     broadcast(wss, getHistory(cfg));
     broadcast(wss, { type: "skill-state", ...getSkillState(cfg.skillDir) });
+    broadcast(wss, parseMetaState(cacheRoot, skillRepo));
   }, 2000);
 
   server.listen(port, () => {
