@@ -36,7 +36,14 @@ contextCmds: []
 
 # ── Env exported into the PTY before each session ────────────────────────────
 env:
-  IDEATE_CLI:     "claude -p"
+  # Non-agentic, deterministic ideate. `claude -p` defaults to ALL tools
+  # enabled → it ran autoninja/edits itself and replied in prose instead of a
+  # diff (root cause of apply-fail; see specs/2026-05-16-…-design.md §2).
+  # --tools "" disables every tool; --output-format json isolates the model
+  # text in .result (run.sh pipes through lib/extract_result.py). Verified
+  # 2026-05-16 on claude v2.1.138: even via unquoted $ideate_cli word-split
+  # the literal "" token is normalized to "disable all tools".
+  IDEATE_CLI:     'claude -p --tools "" --output-format json --no-session-persistence --max-budget-usd 1.50'
   AR_DEPOT_TOOLS: /home/fxy/depot_tools
   AR_GFX_DIR:     /home/fxy/work/gfxbench/tfw-pkg
   # AR_PERF_LOG kept for future perf re-enable; verifyCmd currently doesn't write it
