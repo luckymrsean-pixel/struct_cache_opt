@@ -349,12 +349,16 @@ async function runSession(cfg: Config, term: Terminal): Promise<void> {
     const patchTag = `AR_EOF_${rand()}`;
     const apply = await runWithStageLog(
       term, cfg.workdir, 2, n,
-      // --recount: LLM-authored unified diffs routinely get the `@@ -a,b +c,d @@`
-      // line counts off by ±1 (correct +/- content, wrong header arithmetic).
-      // --recount recomputes the counts from the hunk body, turning the most
-      // common LLM-diff defect from apply-fail into a clean apply.
+      // LLM-authored unified diffs are fragile two ways: (1) `@@ -a,b +c,d @@`
+      // counts off by ±1 — `git apply --recount` recomputes them; (2) context
+      // lines slightly off / multi-hunk offset drift — `git apply` rejects
+      // these outright but GNU `patch --fuzz` absorbs them. Cascade: prefer the
+      // exact git apply (least chance of misplacement); fall back to fuzzy
+      // patch so a usable diff still lands. Build+verify+scope-guard downstream
+      // catch any mis-fuzzed result (→ discard), so tolerance here is safe.
       `cat > .ar.patch <<'${patchTag}'\n${ideate.stdout}\n${patchTag}\n` +
-      `git apply --recount --check .ar.patch && git apply --recount .ar.patch`,
+      `( git apply --recount --check .ar.patch && git apply --recount .ar.patch ) || ` +
+      `patch -p1 --fuzz=3 --no-backup-if-mismatch -s < .ar.patch`,
     );
     if (apply.exitCode !== 0) {
       setStage(2, "error");

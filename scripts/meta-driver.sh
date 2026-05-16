@@ -101,9 +101,12 @@ for ((k = 1; k <= META_ITERS; k++)); do
   IFS=$'\t' read -r P_FILE P_SCOPE P_ONE P_HYP <<< "$PROP_OUT"
   dlog "proposal: FILE=$P_FILE SCOPE=$P_SCOPE :: $P_ONE"
 
-  # 3. Apply + meta: commit + tag.
-  if ! git -C "$SKILL_REPO" apply --recount "/tmp/meta-driver.diff" 2>>"$DRIVER_LOG"; then
-    dlog "skip meta-iter $k: proposed diff did not apply"
+  # 3. Apply + meta: commit + tag. Same fragility as the inner loop's diffs:
+  # prefer exact git apply --recount, fall back to fuzzy GNU patch.
+  if ! ( git -C "$SKILL_REPO" apply --recount "/tmp/meta-driver.diff" 2>>"$DRIVER_LOG" \
+         || ( cd "$SKILL_REPO" && patch -p1 --fuzz=3 --no-backup-if-mismatch -s \
+                < /tmp/meta-driver.diff ) 2>>"$DRIVER_LOG" ); then
+    dlog "skip meta-iter $k: proposed diff did not apply (git apply + patch fuzz both failed)"
     git -C "$SKILL_REPO" checkout -q -- . 2>/dev/null || true
     continue
   fi
