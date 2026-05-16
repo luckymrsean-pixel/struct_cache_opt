@@ -138,10 +138,22 @@ Eval-N: $N"
     git -C "$SKILL_REPO" reset -q --hard champion
     continue
   fi
-  TAG_OUT=$(bash "$SKILL_REPO/scripts/tag_meta_iter.sh" 2>>"$DRIVER_LOG")
-  NEW_TAG=$(echo "$TAG_OUT" | grep -oE 'skill-v[0-9]+' | tail -1)
-  [ -z "$NEW_TAG" ] && NEW_TAG=$(git -C "$SKILL_REPO" describe --tags --exact-match HEAD 2>/dev/null)
-  dlog "tagged $NEW_TAG"
+  # Deterministic, collision-proof tag. Compute next skill-v<N> from existing
+  # tags, tag THIS meta commit, and ASSERT the tag resolves to it. The prior
+  # code parsed tag_meta_iter.sh stdout and could end up benchmarking a stale
+  # foreign tag (which silently reverted the skill to its original state).
+  META_HEAD=$(git -C "$SKILL_REPO" rev-parse HEAD)
+  lastn=$(git -C "$SKILL_REPO" tag -l 'skill-v*' | sed 's/^skill-v//' \
+            | grep -E '^[0-9]+$' | sort -n | tail -1)
+  [ -z "$lastn" ] && lastn=-1
+  NEW_TAG="skill-v$((lastn + 1))"
+  git -C "$SKILL_REPO" tag -f "$NEW_TAG" "$META_HEAD" >/dev/null 2>>"$DRIVER_LOG"
+  if [ "$(git -C "$SKILL_REPO" rev-parse "$NEW_TAG^{commit}" 2>/dev/null)" != "$META_HEAD" ]; then
+    dlog "skip meta-iter $k: tag $NEW_TAG did not pin the new commit — abort (no wrong-skill bench)"
+    git -C "$SKILL_REPO" checkout -q -- . 2>/dev/null || true
+    continue
+  fi
+  dlog "tagged $NEW_TAG @ $(git -C "$SKILL_REPO" rev-parse --short "$META_HEAD")"
 
   # 4. Bench it (Phase 1, unchanged) — moves champion on advance.
   if bash "$CACHE_ROOT/scripts/meta-bench.sh" --skill-tag "$NEW_TAG" --N "$N" 2>>"$DRIVER_LOG"; then
