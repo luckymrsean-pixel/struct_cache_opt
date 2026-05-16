@@ -1,7 +1,12 @@
 # Meta-Loop Phase 2 + Monitoring — Design
 
 **Date:** 2026-05-16
-**Status:** Spec (driven to implementation under an explicit completion goal — no approval gate)
+**Status:** Implemented & verified 2026-05-16. Module A (ideate reliability)
+proven by a headless inner iter reaching verify with a real metric
+(baseline 81.4M cache-misses → iter1 measured 94.6M, correctly discarded as
+regress) — the loop now does real optimization (was apply-fail every time).
+Modules B (Phase-2 driver) + C (Evolution monitoring) implemented with unit
+tests + dry-run green. Skill `champion`/`skill-v0` re-tagged to `95121cf`.
 **Related:** `2026-05-13-meta-loop-design.md` (Phase 1, the [P2-seam] hooks this builds on),
 `2026-05-14-dashboard-meta-rework-design.md` (Skill Quadrants + stage-log panel this extends)
 
@@ -54,8 +59,12 @@ locate the protocol anywhere in the output. Both, not either.
 Change `vk-image-helper.yml` `env.IDEATE_CLI` to:
 
 ```
-claude -p --tools "" --output-format json --no-session-persistence --permission-mode plan
+claude -p --tools "" --output-format json --no-session-persistence
 ```
+
+Empirically verified 2026-05-16: this combo returns a single clean JSON
+object on stdout with `.result` = exactly the model's text (no agent banner,
+no tool use, exit 0).
 
 - `--tools ""` — disables every tool. claude *cannot* build/edit; its only
   possible output is a text completion = the diff. Kills A1 at the source.
@@ -63,8 +72,9 @@ claude -p --tools "" --output-format json --no-session-persistence --permission-
   isolated from the "Detected AI agent env" banner and any stderr.
 - `--no-session-persistence` — no cross-iter state leakage (each ideate is
   cold, matching meta-bench's cold-start contract).
-- `--permission-mode plan` — defense in depth; even if a tool slipped through
-  it could not mutate the tree.
+- `--permission-mode plan` was tried and dropped: with `--tools ""` there is
+  nothing to gate, and `plan` mode risks the model emitting a plan instead of
+  the diff. `--max-budget-usd <cap>` is added per call as the cost guard.
 
 `IDEATE_CLI` is a yml `env:` value, not a frozen skill file — changing it is a
 harness config edit, not a skill mutation, so it does not touch the MANIFEST
