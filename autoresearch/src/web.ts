@@ -21,7 +21,7 @@
  */
 
 import * as http from "http";
-import { existsSync, readFileSync, statSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, statSync } from "fs";
 import { execSync } from "child_process";
 import { join, dirname } from "path";
 import { WebSocket, WebSocketServer } from "ws";
@@ -96,6 +96,35 @@ export function resetIterStages(): void {
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+// ─── Ideate backend (claude | copilot) — single source of truth = the yml ────
+// The inner loop (loop.ts) and meta-driver both read IDEATE_BACKEND from the
+// yml, so the dashboard toggle just rewrites that one line. Effect applies to
+// the next loop session / meta-iter (a running headless loop keeps its cfg).
+
+function ymlPath(cacheRoot: string): string {
+  return join(cacheRoot, "vk-image-helper.yml");
+}
+function getBackend(cacheRoot: string): "claude" | "copilot" {
+  try {
+    const m = readFileSync(ymlPath(cacheRoot), "utf8")
+      .match(/^\s*IDEATE_BACKEND:\s*([A-Za-z]+)/m);
+    return m && m[1] === "copilot" ? "copilot" : "claude";
+  } catch { return "claude"; }
+}
+function setBackendYml(cacheRoot: string, val: "claude" | "copilot"): boolean {
+  try {
+    const p = ymlPath(cacheRoot);
+    const src = readFileSync(p, "utf8");
+    if (!/^\s*IDEATE_BACKEND:/m.test(src)) return false;
+    writeFileSync(p, src.replace(
+      /^(\s*IDEATE_BACKEND:\s*)[A-Za-z]+(.*)$/m, `$1${val}$2`));
+    return true;
+  } catch { return false; }
+}
+function backendMsg(cacheRoot: string): object {
+  return { type: "backend", value: getBackend(cacheRoot) };
+}
 
 function broadcast(wss: WebSocketServer, msg: object): void {
   const s = JSON.stringify(msg);
@@ -255,6 +284,13 @@ export function startWebServer(
     metaRootCandidates.find((p) => existsSync(join(p, "meta_results.tsv"))) ??
     metaRootCandidates[0];
   const skillRepo = cfg.skillDir ? dirname(cfg.skillDir) : "";
+
+  // Stage 0 is "Init & auth". Only the claude backend may need an interactive
+  // login; copilot uses cached gh auth → no manual step, so Stage 0 starts
+  // "done" (prevents the dashboard looking perpetually stuck on a login the
+  // operator can't / needn't perform). loop.ts still flips it during a real
+  // dashboard-driven session.
+  loopState.stages[0] = getBackend(cacheRoot) === "copilot" ? "done" : "confirm";
 
   const server = http.createServer((req, res) => {
     const url = req.url ?? "/";
@@ -483,6 +519,7 @@ export function startWebServer(
     ws.send(JSON.stringify(getHistory(cfg)));
     ws.send(JSON.stringify({ type: "skill-state", ...getSkillState(cfg.skillDir) }));
     ws.send(JSON.stringify(parseMetaState(cacheRoot, skillRepo)));
+    ws.send(JSON.stringify(backendMsg(cacheRoot)));
 
     ws.on("message", async (raw: Buffer) => {
       try {
@@ -492,6 +529,21 @@ export function startWebServer(
           runtime.dryRun = m.dryRun;
           console.error(`[web] dryRun = ${runtime.dryRun}`);
           broadcast(wss, { type: "toast", msg: `Dry Run ${runtime.dryRun ? "ON" : "OFF"}` });
+        }
+        if (m.type === "config" &&
+            (m.ideateBackend === "claude" || m.ideateBackend === "copilot")) {
+          if (setBackendYml(cacheRoot, m.ideateBackend)) {
+            if (cfg.env) cfg.env.IDEATE_BACKEND = m.ideateBackend;
+            loopState.stages[0] =
+              m.ideateBackend === "copilot" ? "done" : "confirm";
+            console.error(`[web] ideateBackend = ${m.ideateBackend}`);
+            broadcast(wss, { type: "toast",
+              msg: `Ideate backend → ${m.ideateBackend} (applies to next loop / meta-iter)` });
+            broadcast(wss, backendMsg(cacheRoot));
+          } else {
+            broadcast(wss, { type: "toast",
+              msg: "Backend switch failed (yml has no IDEATE_BACKEND line)" });
+          }
         }
         if (m.type === "loop" && m.action === "start") {
           // Iteration count override from the dashboard's "× <N>" input.
@@ -539,6 +591,7 @@ export function startWebServer(
     broadcast(wss, getHistory(cfg));
     broadcast(wss, { type: "skill-state", ...getSkillState(cfg.skillDir) });
     broadcast(wss, parseMetaState(cacheRoot, skillRepo));
+    broadcast(wss, backendMsg(cacheRoot));
   }, 2000);
 
   server.listen(port, () => {

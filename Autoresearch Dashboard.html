@@ -316,6 +316,13 @@ label.field-lbl { display:block; font-size:10px; color:var(--dim); margin-bottom
     <label class="dry-run" id="dry-run-lbl">
       <input type="checkbox" id="dry-run-cb" onchange="toggleDryRun(this)"/> Dry Run
     </label>
+    <span class="tb-lbl" style="margin-left:6px">ideate</span>
+    <select id="backend-sel" onchange="setBackend(this.value)"
+      title="Which CLI generates diffs. Applies to the next loop / meta-iter."
+      style="background:#161b22;color:var(--text);border:1px solid var(--border);border-radius:4px;font-size:11px;padding:3px 6px;cursor:pointer">
+      <option value="claude">claude</option>
+      <option value="copilot">copilot</option>
+    </select>
   </div>
   <div class="tb-sep"></div>
   <div style="display:flex;align-items:center;gap:8px;">
@@ -473,8 +480,8 @@ document.getElementById('scope-nl').addEventListener('input', updatePrompt);
 // ─── Stage management ─────────────────────────────────────────────────────────
 
 let stages = [
-  { id:0, name:'Init & Claude Login',
-    script:'# Manual: in main terminal, run `claude login` once, then click ✓ Confirm.\n# setupCmds (from yml) run AFTER this confirm:\n#   - export CCACHE_DIR=$HOME/.ccache\n#   - cd /home/fxy/angle && git config user.email autoresearch@local\n#   - [ -d /mnt/f/code2/target_skill/.git ] || git init /mnt/f/code2/target_skill',
+  { id:0, name:'Init & Auth',
+    script:'# Ideate backend is choosable (topbar “ideate” selector).\n#   copilot — uses cached gh auth; NO manual login, Stage 0 auto-OK.\n#   claude  — needs a one-time `claude login` in a terminal, then ✓ Confirm.\n# Real loops run headless via meta-driver (this dashboard observes).\n# setupCmds (from yml) run after init.',
     manual:true, status:'confirm', log:'stage-0.log', expanded:true },
   { id:1, name:'Generate Diff (struct_cache_opt skill)',
     script:'# Loop runs:  ${skillDir}/run.sh < .ar-context.txt > .ar.patch\n# Context = pahole(vk::ImageHelper) + git log -10 (with perf body) + tail(results.tsv)\n# Skill calls $IDEATE_CLI (default: claude -p) with prompt.tmpl + sources in scope.',
@@ -596,6 +603,28 @@ function toggleDryRun(cb) {
   renderStages();
   if (ws && ws.readyState === WebSocket.OPEN)
     ws.send(JSON.stringify({ type:'config', dryRun: cb.checked }));
+}
+
+// Ideate backend selector (claude | copilot). The server rewrites the yml's
+// IDEATE_BACKEND line; effect applies to the next loop / meta-iter.
+function setBackend(v) {
+  if (ws && ws.readyState === WebSocket.OPEN)
+    ws.send(JSON.stringify({ type:'config', ideateBackend: v }));
+  else
+    showToast('Not connected — cannot switch backend');
+}
+// Sync UI to the server's authoritative backend value (handshake + 2s tick).
+function applyBackend(v) {
+  if (v !== 'claude' && v !== 'copilot') return;
+  const sel = document.getElementById('backend-sel');
+  if (sel) sel.value = v;
+  const s0 = stages[0];
+  s0.name = 'Init & Auth — ' + v;
+  // copilot: cached gh auth, no manual login → Stage 0 is satisfied.
+  // claude:  may need a one-time `claude login`, keep the confirm affordance.
+  if (s0.status === 'confirm' || s0.status === 'done')
+    s0.status = (v === 'copilot') ? 'done' : 'confirm';
+  renderStages();
 }
 
 // ─── Log panel ────────────────────────────────────────────────────────────────
@@ -728,6 +757,8 @@ function connectWS() {
       } else if (m.type === 'meta-updated') {
         fetch('/api/meta-state', { cache: 'no-store' })
           .then(r => r.json()).then(renderMetaState).catch(() => {});
+      } else if (m.type === 'backend') {
+        applyBackend(m.value);
       } else if (m.type === 'toast') {
         showToast(m.msg);
       }
