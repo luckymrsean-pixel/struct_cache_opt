@@ -48,8 +48,28 @@ class TestRecount(unittest.TestCase):
         hdrs = [l for l in recount(d).split("\n") if l.startswith("@@")]
         self.assertEqual(hdrs, ["@@ -1,1 +1,1 @@", "@@ -50,1 +50,1 @@"])
 
-    def test_garbage_no_throw(self):
+    def test_garbage_no_throw_unchanged(self):
         self.assertEqual(recount("not a diff at all"), "not a diff at all")
+
+    def test_hunk_output_is_newline_terminated(self):
+        # last hunk line lacks a trailing newline (common LLM output)
+        d = "@@ -1,1 +1,2 @@\n a\n+b"
+        r = recount(d)
+        self.assertTrue(r.endswith("\n"), repr(r))
+        self.assertFalse(r.endswith("\n\n"))
+
+    def test_interior_bare_blank_becomes_space_context(self):
+        # model emitted a blank context line as bare "" (no leading space)
+        d = "@@ -1,3 +1,3 @@\n a\n\n-b\n+c\n"
+        r = recount(d)
+        body = r.split("\n")
+        # the blank between ' a' and '-b' must be a single space, not ""
+        self.assertEqual(body[2], " ")
+        self.assertEqual(body[0], "@@ -1,3 +1,3 @@")  # blank counted as ctx
+
+    def test_passthrough_no_forced_newline_when_no_hunk(self):
+        self.assertEqual(recount("plain text no newline"),
+                         "plain text no newline")
 
 
 if __name__ == "__main__":
