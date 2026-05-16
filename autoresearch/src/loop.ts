@@ -349,8 +349,12 @@ async function runSession(cfg: Config, term: Terminal): Promise<void> {
     const patchTag = `AR_EOF_${rand()}`;
     const apply = await runWithStageLog(
       term, cfg.workdir, 2, n,
+      // --recount: LLM-authored unified diffs routinely get the `@@ -a,b +c,d @@`
+      // line counts off by ±1 (correct +/- content, wrong header arithmetic).
+      // --recount recomputes the counts from the hunk body, turning the most
+      // common LLM-diff defect from apply-fail into a clean apply.
       `cat > .ar.patch <<'${patchTag}'\n${ideate.stdout}\n${patchTag}\n` +
-      `git apply --check .ar.patch && git apply .ar.patch`,
+      `git apply --recount --check .ar.patch && git apply --recount .ar.patch`,
     );
     if (apply.exitCode !== 0) {
       setStage(2, "error");
