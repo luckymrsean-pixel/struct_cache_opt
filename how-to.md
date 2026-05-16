@@ -259,3 +259,44 @@ vk_helpers.cpp ~540KB,把它整个塞进 claude 的 prompt 是 prompt token /
 需要让 agent 完全脱手干预(不点 UI)时,操作员仍要先在 main terminal
 里跑一次 `claude login`(或 `IDEATE_CLI` 对应的鉴权命令)完成 Stage 0,
 之后 agent 可以全程通过 `ws://localhost:8080` 控制。
+
+---
+
+## 7. Phase 2 — 自治 meta-loop(进化 skill 本身)
+
+`meta-bench.sh`(Phase 1)只评测一个 skill 版本;**Phase 2** 的
+`scripts/meta-driver.sh` 在它外面套一层,自动**提议**下一个 skill 改动:
+
+```bash
+# 一次性:给新 contract 基线播种 champion 的 result.json
+bash scripts/meta-bench.sh --skill-tag skill-v0 --N 2
+
+# 自治跑 3 个 meta-iter(每个内部 N inner iters)
+nohup bash scripts/meta-driver.sh --meta-iters 3 --N 3 \
+  > meta-runs/driver.console.log 2>&1 & echo $! > meta-driver.pid
+```
+
+每个 meta-iter:`checkout champion` → `propose_meta_edit.py`(非 agentic
+LLM,只能改 MANIFEST 里 `evolving:` 的文件)→ `meta(<scope>):` commit +
+`skill-v<N>` tag → `meta-bench.sh`(advance 时移动 `champion`)。
+
+- **幂等**:meta-iter 序号从 `meta_results.tsv` 推出,被 kill 后重跑续接。
+- **预算**:`--max-usd <x>`;每次 ideate 另有 yml 里 `--max-budget-usd`。
+- **坏提议**(碰 frozen 文件 / 不 parse / diff 不 apply)记为 skip,继续。
+- `meta-runs/driver.log` 每个 meta-iter 一行;`meta-driver.pid` 在跑时存在。
+
+**ideate 可靠性修复(2026-05-16,real optimization 的前提)**:
+`IDEATE_CLI` 现为 `claude -p --tools "" --output-format json …` —
+`--tools ""` 禁掉所有工具(否则 claude 自己跑 autoninja/编辑、用散文
+回答而非 diff,是历史 apply-fail 的根因);`run.sh` 经
+`lib/extract_result.py` 取 `.result`;`lib/parse_output.py` 在整段输出里
+定位 STATUS+diff、容忍 ```diff 围栏、补尾换行;`loop.ts` 用
+`git apply --recount` 吸收 LLM hunk 行数 ±1 误差。run.sh 的 Phase 1/2
+(pahole/fuse)输出改走 stderr,不再污染 diff 通道。
+
+**监控**:dashboard 右栏新增 **Evolution — meta-loop** 面板(champion、
+driver 状态、M1 趋势 sparkline、lineage 表;`decision` 颜色:advance=绿
+revert=红 skip/manual=黄)。数据走 `GET /api/meta-state` +
+`GET /api/meta-run?tag=`,`fs.watch` meta_results.tsv/driver.log 触发
+`meta-updated` 让前端重拉。无 meta-iter 时显示 "no meta-iters yet"
+(不造假数据)。

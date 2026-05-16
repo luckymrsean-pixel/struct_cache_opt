@@ -406,6 +406,24 @@ label.field-lbl { display:block; font-size:10px; color:var(--dim); margin-bottom
     <div class="commit-list" id="commit-list"></div>
   </div>
 
+  <!-- Evolution (Phase-2 meta-loop) -->
+  <div class="r-sec" id="evo-sec" style="flex-shrink:0;max-height:300px;overflow-y:auto">
+    <div class="pane-title">Evolution — meta-loop</div>
+    <div class="branch-row">
+      champion <span class="branch-name" id="evo-champ">—</span>
+      <span id="evo-driver" style="margin-left:8px;font-size:11px;color:#888">driver: —</span>
+    </div>
+    <svg id="evo-spark" width="100%" height="34" viewBox="0 0 240 34"
+         preserveAspectRatio="none" style="display:block;margin:4px 0"></svg>
+    <div id="evo-status" style="font-size:11px;color:#9ab;margin:2px 0 6px"></div>
+    <table id="evo-table" style="width:100%;border-collapse:collapse;font-size:11px">
+      <thead><tr style="color:#888;text-align:left">
+        <th>#</th><th>skill</th><th>M1 Δmiss</th><th>M2</th><th>M3</th>
+        <th>cov</th><th>decision</th></tr></thead>
+      <tbody id="evo-rows"><tr><td colspan="7" style="color:#777">no meta-iters yet</td></tr></tbody>
+    </table>
+  </div>
+
   <!-- Stage logs -->
   <div class="r-sec" style="border-bottom:none;flex-shrink:0;max-height:280px;overflow-y:auto">
     <div class="pane-title">阶段日志</div>
@@ -705,6 +723,11 @@ function connectWS() {
         renderSkillState(m);
       } else if (m.type === 'stage-log-updated') {
         onStageLogUpdated(m.stage);
+      } else if (m.type === 'meta-state') {
+        renderMetaState(m);
+      } else if (m.type === 'meta-updated') {
+        fetch('/api/meta-state', { cache: 'no-store' })
+          .then(r => r.json()).then(renderMetaState).catch(() => {});
       } else if (m.type === 'toast') {
         showToast(m.msg);
       }
@@ -1000,7 +1023,60 @@ if (DEMO_MODE) {
 } else {
   refetchStageLog();
   fetch('/api/skill-state').then(r => r.json()).then(renderSkillState).catch(() => {});
+  fetch('/api/meta-state', { cache:'no-store' }).then(r => r.json()).then(renderMetaState).catch(() => {});
   connectWS();
+}
+
+function renderMetaState(m) {
+  if (!m || m.type !== 'meta-state') return;
+  const champ = document.getElementById('evo-champ');
+  if (champ) champ.textContent = m.champion || '—';
+  const drv = document.getElementById('evo-driver');
+  if (drv) {
+    drv.textContent = 'driver: ' + (m.driverRunning ? 'running' : 'idle');
+    drv.style.color = m.driverRunning ? '#3c6' : '#888';
+  }
+  const st = document.getElementById('evo-status');
+  if (st) st.textContent = m.lastDriverLine || '';
+
+  const rows = m.rows || [];
+  const tb = document.getElementById('evo-rows');
+  if (tb) {
+    if (!rows.length) {
+      tb.innerHTML = '<tr><td colspan="7" style="color:#777">no meta-iters yet</td></tr>';
+    } else {
+      const col = d => d === 'advance' ? '#3c6' : d === 'revert' ? '#e55'
+                     : (d === 'skip' || d === 'manual') ? '#db4' : '#9ab';
+      tb.innerHTML = rows.map(r => {
+        const isChamp = r.skill_tag === m.champion;
+        return `<tr style="border-top:1px solid #222${isChamp ? ';background:#15301f' : ''}">
+          <td>${r.meta_iter}</td>
+          <td>${r.skill_tag}${isChamp ? ' ★' : ''}</td>
+          <td>${Number(r.M1 || 0).toLocaleString()}</td>
+          <td>${r.M2 || ''}</td><td>${r.M3 || ''}</td><td>${r.M4 || ''}</td>
+          <td style="color:${col(r.decision)}" title="${(r.reason||'').replace(/"/g,'&quot;')}">${r.decision || ''}</td>
+        </tr>`;
+      }).join('');
+    }
+  }
+
+  // M1 trend sparkline (Δcache-misses across meta-iters; higher = better).
+  const svg = document.getElementById('evo-spark');
+  if (svg) {
+    const ys = rows.map(r => Number(r.M1 || 0));
+    if (ys.length >= 2) {
+      const max = Math.max(...ys, 1), min = Math.min(...ys, 0);
+      const span = (max - min) || 1;
+      const pts = ys.map((y, i) => {
+        const x = (i / (ys.length - 1)) * 238 + 1;
+        const yy = 32 - ((y - min) / span) * 30;
+        return `${x.toFixed(1)},${yy.toFixed(1)}`;
+      }).join(' ');
+      svg.innerHTML = `<polyline points="${pts}" fill="none" stroke="#3c6" stroke-width="1.5"/>`;
+    } else {
+      svg.innerHTML = '';
+    }
+  }
 }
 </script>
 </body>
