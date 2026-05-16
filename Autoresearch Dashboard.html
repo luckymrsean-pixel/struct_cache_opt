@@ -573,8 +573,23 @@ function removeStage(i) {
   renderStages();
 }
 
+// Clicking a "log" link (Setup Stages or the 阶段日志 list) loads that stage
+// into the center Stage Log panel (slp-body). Previously a no-op stub — that
+// is why clicking did nothing. Pins the stage (turns off follow) so it stays
+// on what the operator picked until they choose 📍 follow again.
 function openLog(name) {
-  showToast(`Opening ${name} in stage log panel`);
+  const mt = String(name).match(/stage-(\d+)\.log/);
+  if (!mt) { showToast(`no stage in ${name}`); return; }
+  const stage = Number(mt[1]);
+  slpFollow  = false;
+  slpCurrent = stage;
+  const sel = document.getElementById('slp-stage-sel');
+  if (sel) sel.value = String(stage);
+  refetchStageLog();
+  const panel = document.getElementById('stage-log-panel');
+  if (panel && panel.scrollIntoView)
+    panel.scrollIntoView({ behavior:'smooth', block:'nearest' });
+  showToast(`stage-${stage}.log →`);
 }
 
 renderStages();
