@@ -1,3 +1,6 @@
+# Dependencies
+node_modules/
+
 # Runtime state
 loop.log
 loop.pid
