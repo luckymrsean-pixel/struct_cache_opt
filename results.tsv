@@ -4,3 +4,5 @@ iter	status	metric	delta	exit	warns	desc	ts
 1	keep	67974022	-23500513	0	0	keep	2026-05-13T13:39:32.975Z
 2	discard			128	0	apply-fail	2026-05-13T13:41:50.941Z
 3	discard			128	0	apply-fail	2026-05-13T13:44:17.655Z
+1	discard	87194574	19220552	0	0	regress	2026-05-16T02:45:56.483Z
+1	dry-run			1	0	discard/ideate-fail	2026-05-16T04:08:02.124Z

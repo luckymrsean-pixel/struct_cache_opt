@@ -14,8 +14,9 @@ const RECOUNT = join(__dirname, "..", "..", "scripts", "recount_diff.py");
 // ─── Runtime + dashboard controller ───────────────────────────────────────────
 //
 // `runtime` holds mutable flags the dashboard / web layer flips at runtime:
-//   - dryRun: replace the LLM call with `cat <dryRunPatch>` so the rest of the
-//     pipeline still runs, and remap the resulting TSV row to status="dry-run".
+//   - dryRun: replace the LLM call with dryRunIdeateCmd() (auto-generates a
+//     fresh, appliable dummy diff each iter) so the rest of the pipeline still
+//     runs, and remap the resulting TSV row to status="dry-run".
 //   - stopRequested: signal the iteration loop to break after the current iter.
 //   - iterationsOverride: per-session iteration count from the dashboard's
 //     "× <count>" input (overrides cfg.iterations for one session).
@@ -97,7 +98,7 @@ function makeRow(
  * on exit. Errors in the log writer are swallowed (logged to stderr) so they
  * never fail the loop.
  */
-async function runWithStageLog(
+export async function runWithStageLog(
   term:    Terminal,
   workdir: string,
   stage:   number,
@@ -107,10 +108,88 @@ async function runWithStageLog(
 ): Promise<CmdResult> {
   try { await writeStageLogHead(workdir, stage, iter, cmd); }
   catch (e) { console.error(`[stage-log] head ${stage} failed:`, e); }
-  const r = await term.run(cmd, timeoutMs);
+  let r: CmdResult;
+  try {
+    r = await term.run(cmd, timeoutMs);
+  } catch (e) {
+    // term.run rejected (timeout / terminal died). Close the stage log with a
+    // failure footer so the dashboard shows the stage as errored instead of
+    // freezing on a half-open "# begin"-only file, then rethrow unchanged.
+    const msg = e instanceof Error ? e.message : String(e);
+    try {
+      await writeStageLogTail(workdir, stage, {
+        stdout: "", stderr: msg, exitCode: 124, durationMs: 0,
+      });
+    } catch (e2) { console.error(`[stage-log] tail ${stage} (on-throw) failed:`, e2); }
+    throw e;
+  }
   try { await writeStageLogTail(workdir, stage, r); }
   catch (e) { console.error(`[stage-log] tail ${stage} failed:`, e); }
   return r;
+}
+
+/**
+ * Build the Stage-2 "apply diff" shell command for a unified diff on stdin.
+ *
+ * Cascade: (1) exact `git apply --recount` (fast path for well-formed diffs,
+ * least misplacement risk); else (2) recount_diff.py fixes bogus @@ counts so
+ * the patch parses, then GNU `patch --fuzz=3` relocates the hunk by context.
+ * Build+verify+scope-guard downstream discard any mis-fuzzed result, so
+ * tolerance here is safe.
+ *
+ * Behaviour-preserving extraction of the original inline command (kept
+ * verbatim so it stays testable as a regression guard). Note the `patch`
+ * fallback reads BOTH the patch and any prompt answers from the redirected
+ * `.ar.recount.patch`; an unappliable/already-applied/unlocatable patch
+ * therefore hits EOF on the prompt and takes the default → it terminates
+ * non-zero fast, it does NOT block the PTY. test-apply-cmd.ts locks this in.
+ */
+export function buildApplyCmd(
+  patchStdout: string,
+  patchTag:    string,
+  recountPath: string,
+): string {
+  return (
+    `cat > .ar.patch <<'${patchTag}'\n${patchStdout}\n${patchTag}\n` +
+    `( git apply --recount --check .ar.patch && git apply --recount .ar.patch ) || ` +
+    `( python3 ${recountPath} < .ar.patch > .ar.recount.patch && ` +
+    `patch -p1 --fuzz=3 --no-backup-if-mismatch -s < .ar.recount.patch )`
+  );
+}
+
+/**
+ * Build the Stage-1 command for dry-run mode (dashboard "Dry Run" toggle).
+ *
+ * Root cause of "dry run 卡死在 apply diff": dry-run replaced the LLM with
+ * `cat <dryRunPatch>`, but nothing ever created that file, so Stage-1 failed
+ * every iter and the "apply diff" stage never advanced. This emits a real,
+ * guaranteed-appliable unified diff so apply→build→verify→decide runs WITHOUT
+ * spending LLM budget — exactly "测试 AI 以外的流程".
+ *
+ * Strategy: derive the diff from the LIVE first-scope file via `git diff` (so
+ * its context always matches the working tree), make the inserted marker
+ * UNIQUE per iter (so it can never look "already applied"), persist it to
+ * `dryRunPatch` for operator inspection, then RESTORE the file — the loop's
+ * own Stage-2 re-applies + commits it. Runs with cwd = workdir. Degrades
+ * cleanly (non-zero / empty stdout → normal ideate-fail), never blocks.
+ */
+export function dryRunIdeateCmd(cfg: Config, iter: number): string {
+  const scope0 = cfg.scope?.[0];
+  if (!scope0) {
+    // `false`, not `exit 1`: this string runs inside the terminal's `{ … }`
+    // wrapper, where `exit` would kill the PTY shell itself.
+    return `echo 'dry-run: cfg.scope is empty — nothing to diff' >&2; false`;
+  }
+  const out    = cfg.dryRunPatch || "/tmp/struct_cache_opt.fake.patch";
+  const marker = `// ar-dry-run iter ${iter} ${rand()} (no-op marker)`;
+  return (
+    `F=${shq(scope0)}; O=${shq(out)}; ` +
+    `cp -- "$F" "$F.ar-dryrun-bak" && ` +
+    `printf '\\n%s\\n' ${shq(marker)} >> "$F" && ` +
+    `git diff -- "$F" > "$O"; ` +
+    `mv -f -- "$F.ar-dryrun-bak" "$F"; ` +
+    `cat -- "$O"`
+  );
 }
 
 async function runOrDie(
@@ -316,7 +395,7 @@ async function runSession(cfg: Config, term: Terminal): Promise<void> {
 
     // 2+3. Pick + Modify — call ideatePrompt, get unified diff on stdout ────
     const ideateCmd = runtime.dryRun
-      ? `cat ${cfg.dryRunPatch || "/dev/null"}`
+      ? dryRunIdeateCmd(cfg, n)
       : cfg.ideatePrompt;
     const heredocTag = `AR_EOF_${rand()}`;
     const ctxBody =
@@ -356,17 +435,11 @@ async function runSession(cfg: Config, term: Terminal): Promise<void> {
     const patchTag = `AR_EOF_${rand()}`;
     const apply = await runWithStageLog(
       term, cfg.workdir, 2, n,
-      // LLM diffs are fragile 3 ways: bogus @@ counts, hallucinated start
-      // lines, and context drift. Cascade: (1) exact `git apply --recount`
-      // (fast path for well-formed diffs, least misplacement risk); else
-      // (2) recount_diff.py fixes the @@ counts so the patch parses, then
-      // GNU `patch --fuzz=3` ignores the bogus start line and relocates the
-      // hunk by context. Build+verify+scope-guard downstream discard any
-      // mis-fuzzed result, so tolerance here is safe.
-      `cat > .ar.patch <<'${patchTag}'\n${ideate.stdout}\n${patchTag}\n` +
-      `( git apply --recount --check .ar.patch && git apply --recount .ar.patch ) || ` +
-      `( python3 ${RECOUNT} < .ar.patch > .ar.recount.patch && ` +
-      `patch -p1 --fuzz=3 --no-backup-if-mismatch -s < .ar.recount.patch )`,
+      buildApplyCmd(ideate.stdout, patchTag, RECOUNT),
+      // Explicit bound. With buildApplyCmd's non-interactive `patch` this can
+      // no longer block, but a finite timeout guarantees the stage closes
+      // (runWithStageLog still writes a tail) so the dashboard can't freeze.
+      5 * 60_000,
     );
     if (apply.exitCode !== 0) {
       setStage(2, "error");

@@ -30,7 +30,7 @@ counter 嵌入 commit body → cache-misses 低于历史最好 → 保留;否则
 | `perf` | `/usr/bin/perf` | **WSL2 注意**:stock perf 是 wrapper,需要 `linux-tools-standard-WSL2`,否则会 "perf not found for kernel ..."。在真 Linux 主机上跑则正常 |
 | `jq` | 当前缺失 | `sudo apt install jq` 一次即可,fps 从 gfxbench JSON 里取需要它 |
 | Node + tsx | `/home/fxy/.nvm/.../node v22`、`npx tsx` | autoresearch 后端用 |
-| dryRunPatch | `/tmp/struct_cache_opt.fake.patch` | 已存在;Dashboard 勾 Dry Run 时 Stage 1 用 `cat <patch>` 取代 LLM |
+| dryRunPatch | `/tmp/struct_cache_opt.fake.patch` | Dashboard 勾 Dry Run 时 Stage 1 不调 LLM:每个 iter 自动**生成**一个针对首个 scope 文件、保证可 apply 且每轮唯一的 dummy diff(写到此路径供查看),再 `cat` 出来喂给 Stage 2 |
 
 ```bash
 # 一次性
@@ -231,8 +231,9 @@ vk_helpers.cpp ~540KB,把它整个塞进 claude 的 prompt 是 prompt token /
 3. **回到任意 commit**:Dashboard 右栏 "Apply this version" 等价于
    `git -C /home/fxy/angle reset --hard <hash>`。也可以让 Claude 直接发
    WS 消息 `{type:"apply", hash:"<hash>"}` 给 `ws://localhost:8080`。
-4. **Dry Run**:勾 Dashboard 顶栏 Dry Run,或在启动前编辑
-   `dryRunPatch` 内容,验证 Stage 2-5 管线本身没问题(不消耗 LLM 额度)。
+4. **Dry Run**:勾 Dashboard 顶栏 Dry Run 即可——Stage 1 会自动生成一个
+   保证可 apply、每轮唯一的 dummy diff(无需手动准备 `dryRunPatch`),
+   据此验证 Stage 2-5 管线本身没问题(不消耗 LLM 额度)。
 
 ---
 

@@ -48,7 +48,7 @@ env:
   # parse_output.py tolerates either's preamble/fences. Flip backend without
   # touching the skill: just change IDEATE_BACKEND here, then stop→start.
   IDEATE_CLI:      'bash /mnt/f/code2/target_skill/struct_layout_opt/lib/ideate_backend.sh'
-  IDEATE_BACKEND:  copilot          # claude | copilot
+  IDEATE_BACKEND:  claude          # claude | copilot
   IDEATE_MAX_USD:  '1.50'           # claude backend per-call budget cap
   AR_DEPOT_TOOLS: /home/fxy/depot_tools
   AR_GFX_DIR:     /home/fxy/work/gfxbench/tfw-pkg

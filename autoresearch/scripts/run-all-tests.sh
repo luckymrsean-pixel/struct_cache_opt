@@ -27,6 +27,8 @@ run_suite "M4  errors"   "tsx scripts/test-errors.ts"
 run_suite "M5  stage-log" "tsx scripts/test-stage-log.ts"
 run_suite "M6  skill-state" "tsx scripts/test-skill-state.ts"
 run_suite "M7  meta-state" "tsx scripts/test-meta-state.ts"
+run_suite "M8  apply-cmd"  "tsx scripts/test-apply-cmd.ts"
+run_suite "M9  dry-run"    "tsx scripts/test-dry-run.ts"
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
